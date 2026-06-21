@@ -8,7 +8,7 @@ account, no cloud, nothing uploaded.
 
 > This is the free **Lite** edition. A paid **Full** edition adds creation/processing
 > tools (Civitai grabber & browser, Danbooru auto-tagger, AI captioner, prompt
-> engineer, cropper, overlays, and more). See [get CyberHub Full →](https://whop.com/cyberdelia-ai-lab).
+> engineer, cropper, overlays, and more). See [Full edition](#full-edition).
 
 ## Features
 
@@ -37,6 +37,11 @@ Requires **Python 3.10–3.13**.
 
 The Civitai model database (`models.json`) is **not** bundled — fetch it any time
 from **Settings → Civitai** (in-app updater).
+
+## Manual
+
+See [`MANUAL.md`](MANUAL.md) for the full user manual, including Gallery, Viewer,
+Compare, Library, Settings, local data and troubleshooting.
 
 ## Privacy
 

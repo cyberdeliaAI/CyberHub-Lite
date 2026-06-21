@@ -31,6 +31,8 @@ resources/danbooru/*.wasm
 resources/danbooru/*.csv
 resources/danbooru/ort*.js
 resources/danbooru/ort*.mjs
+# Upscaler ONNX models can be large and are runtime assets, not source.
+resources/upscalers/*.onnx
 
 # ─── Editor / OS ──────────────────────────────────────────
 .DS_Store
