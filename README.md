@@ -8,7 +8,7 @@ account, no cloud, nothing uploaded.
 
 > This is the free **Lite** edition. A paid **Full** edition adds creation/processing
 > tools (Civitai grabber & browser, Danbooru auto-tagger, AI captioner, prompt
-> engineer, cropper, overlays, and more). See [Full edition](#full-edition).
+> engineer, cropper, overlays, and more). See [get CyberHub Full →](https://whop.com/cyberdelia-ai-lab).
 
 ## Features
 
@@ -61,4 +61,4 @@ commercial Full edition.
 ## Full edition
 
 The **Full** edition bundles the production tools on top of everything here. It's a
-separate paid product: **[get CyberHub Full →](https://whop.com/your-link-here)**
+separate paid product: **[get CyberHub Full →](https://whop.com/cyberdelia-ai-lab)**

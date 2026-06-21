@@ -2,7 +2,8 @@
 
 **CyberHub Lite is licensed under the PolyForm Noncommercial License 1.0.0.**
 
-Required Notice: Copyright © 2026 Cyberdelia — CyberHub (https://github.com/) 
+Required Notice: Copyright © 2026 Cyberdelia — CyberHub Lite
+(https://github.com/cyberdeliaAI/CyberHub-Lite)
 
 ## In plain language
 
