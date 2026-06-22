@@ -781,38 +781,24 @@ class GalleryDB:
                         FROM folders c
                         WHERE c.parent = f.path
                           AND c.path != c.parent
-                          AND (
-                              c.file_count > 0
-                              OR EXISTS (
-                                  SELECT 1 FROM files img
-                                  WHERE img.folder = c.path
-                                     OR img.folder LIKE c.path || '/%'
-                                  LIMIT 1
-                              )
+                          AND EXISTS (
+                              SELECT 1
+                              FROM folders d
+                              WHERE (d.path = c.path OR d.path LIKE c.path || '/%')
+                                AND d.file_count > 0
+                              LIMIT 1
                           )
                     ) AS has_visible_children,
-                    COALESCE(
-                        f.cover_image,
-                        (
-                            SELECT img.path
-                            FROM files img
-                            WHERE img.folder = f.path
-                               OR img.folder LIKE f.path || '/%'
-                            ORDER BY img.mtime DESC
-                            LIMIT 1
-                        )
-                    ) AS cover_image
+                    f.cover_image
                 FROM folders f
                 WHERE f.parent = ?
                   AND f.path != ?
-                  AND (
-                      f.file_count > 0
-                      OR EXISTS (
-                          SELECT 1 FROM files img
-                          WHERE img.folder = f.path
-                             OR img.folder LIKE f.path || '/%'
-                          LIMIT 1
-                      )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM folders d
+                      WHERE (d.path = f.path OR d.path LIKE f.path || '/%')
+                        AND d.file_count > 0
+                      LIMIT 1
                   )
                 ORDER BY f.name COLLATE NOCASE
             """, (parent, parent)).fetchall()
@@ -2162,6 +2148,7 @@ function createFolderItem(folder, depth) {
     el.addEventListener('click', async function() {
         document.querySelectorAll('.folder-item').forEach(function(f){f.classList.remove('active')});
         el.classList.add('active');
+        if (accordionFolders) closeSiblingFolders(wrapper, folder.path);
         if (searchMode) {
             searchFolderFilter = folder.path;
             currentPage = 1;
@@ -2177,12 +2164,13 @@ function createFolderItem(folder, depth) {
                     children.classList.remove('open'); toggle.classList.remove('open');
                     expandedFolders.delete(folder.path); saveExpandedFolders();
                 } else {
-                    closeSiblingFolders(wrapper, folder.path);
                     await loadChildrenFor(wrapper, folder.path);
                     children.classList.add('open'); toggle.classList.add('open');
                     expandedFolders.add(folder.path); saveExpandedFolders();
                 }
             }
+        } else if (accordionFolders) {
+            saveExpandedFolders();
         }
     });
     // Highlight the folder you're currently browsing.
