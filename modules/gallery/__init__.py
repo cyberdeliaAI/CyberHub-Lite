@@ -3535,7 +3535,7 @@ class GalleryModule(Module):
     """Module wrapper around GalleryDB + the HTML gallery UI."""
 
     name = "Gallery"
-    version = "1.1"
+    version = "1.2"
     icon = "\U0001F5BC"   # 🖼
     description = "Browse and manage your AI-generated image collection."
     order = 10

@@ -27,6 +27,7 @@ import zipfile
 
 class SettingsModule(Module):
     name = "Settings"
+    version = "1.1"
     icon = "\u2699"   # ⚙
     description = "Configure the hub and individual modules."
     show_in_tabs = False     # gear icon in topbar handles navigation
