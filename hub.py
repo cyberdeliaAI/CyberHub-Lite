@@ -79,7 +79,7 @@ class Hub:
     lookup through this object.
     """
 
-    VERSION = "1.0"
+    VERSION = "1.2"
 
     # Subdirectories under resources/ that should always exist. Modules can
     # rely on these being present even if the user wipes the folder.

@@ -50,7 +50,8 @@ Main features:
 - Manual collections.
 - Metadata side panel with parsed prompt, negative prompt, settings and raw
   metadata.
-- Civitai model lookup from the local `models.json` after you fetch it from
+- Civitai model lookup from the local `models.json`. The Civitai release zip
+  may include a current copy; GitHub source installs can fetch/update it from
   Settings -> Civitai.
 - Send prompt metadata to Library cards.
 - Side-by-side Compare from selected images.

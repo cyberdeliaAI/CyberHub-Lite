@@ -35,8 +35,9 @@ Requires **Python 3.10–3.13**.
    - **macOS / Linux:** `./start.sh`
 3. Open the URL it prints, go to **Settings**, and add your image folder.
 
-The Civitai model database (`models.json`) is **not** bundled — fetch it any time
-from **Settings → Civitai** (in-app updater).
+The GitHub source does not bundle the Civitai model database (`models.json`).
+The Civitai release zip may include a current copy for convenience. You can
+refresh or fetch it any time from **Settings → Civitai**.
 
 ## Manual
 
