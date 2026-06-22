@@ -3407,9 +3407,15 @@ function highlightFolderRetry(path) {
     applyMetaPanelState();
     var info = await API.get('/api/info');
     if (info) hasTrash = !!info.trash;
+    var savedState = loadGalleryState();
+    var savedFolder = savedState.folder;
+    if (savedFolder === undefined || savedFolder === null) {
+        try { savedFolder = localStorage.getItem('galleryFolder') || ''; } catch (e) { savedFolder = ''; }
+    }
+    var restoringFolderView = !(savedState.searchMode && savedState.searchQuery) && !(savedState.specialView || '');
+    if (restoringFolderView) currentFolder = savedFolder || '';
     await loadFolderTree();
     await loadCollections();
-    var savedState = loadGalleryState();
     if (savedState.sort && document.getElementById('sortSelect')) {
         document.getElementById('sortSelect').value = savedState.sort;
     }
@@ -3432,10 +3438,6 @@ function highlightFolderRetry(path) {
         if (savedCol) await viewCollection(savedCol, false);
         else await loadGallery('');
     } else {
-        var savedFolder = savedState.folder;
-        if (savedFolder === undefined || savedFolder === null) {
-            try { savedFolder = localStorage.getItem('galleryFolder') || ''; } catch (e) { savedFolder = ''; }
-        }
         currentFolder = savedFolder || '';
         updateBreadcrumb(currentFolder);
         await loadGallery(currentFolder);
