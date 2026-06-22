@@ -771,9 +771,51 @@ class GalleryDB:
     def get_subfolders(self, parent=""):
         conn = self._get_conn()
         with self.lock:
-            rows = conn.execute(
-                "SELECT path, name, file_count, has_subfolders, cover_image FROM folders WHERE parent=? AND path!=? ORDER BY name COLLATE NOCASE",
-                (parent, parent)).fetchall()
+            rows = conn.execute("""
+                SELECT
+                    f.path,
+                    f.name,
+                    f.file_count,
+                    EXISTS (
+                        SELECT 1
+                        FROM folders c
+                        WHERE c.parent = f.path
+                          AND c.path != c.parent
+                          AND (
+                              c.file_count > 0
+                              OR EXISTS (
+                                  SELECT 1 FROM files img
+                                  WHERE img.folder = c.path
+                                     OR img.folder LIKE c.path || '/%'
+                                  LIMIT 1
+                              )
+                          )
+                    ) AS has_visible_children,
+                    COALESCE(
+                        f.cover_image,
+                        (
+                            SELECT img.path
+                            FROM files img
+                            WHERE img.folder = f.path
+                               OR img.folder LIKE f.path || '/%'
+                            ORDER BY img.mtime DESC
+                            LIMIT 1
+                        )
+                    ) AS cover_image
+                FROM folders f
+                WHERE f.parent = ?
+                  AND f.path != ?
+                  AND (
+                      f.file_count > 0
+                      OR EXISTS (
+                          SELECT 1 FROM files img
+                          WHERE img.folder = f.path
+                             OR img.folder LIKE f.path || '/%'
+                          LIMIT 1
+                      )
+                  )
+                ORDER BY f.name COLLATE NOCASE
+            """, (parent, parent)).fetchall()
         return [{"path": r[0], "name": r[1], "count": r[2], "has_children": bool(r[3]), "cover": r[4]} for r in rows]
 
     def get_files(self, folder="", sort="name", order="asc", page=1, per_page=DEFAULT_PER_PAGE, favorite_only=False, time_filter=None):
@@ -1929,9 +1971,11 @@ var currentFolder = '';
 var selectedFile = null;
 var currentFiles = [];
 var currentMetaTab = 'metadata';
+var accordionFolders = {ACCORDION_FOLDERS};
 // Folder-tree expansion is remembered across navigation/sessions.
 var expandedFolders = new Set();
 try { expandedFolders = new Set(JSON.parse(localStorage.getItem('galleryExpanded') || '[]')); } catch (e) {}
+if (accordionFolders && expandedFolders.size > 1) expandedFolders = new Set();
 function saveExpandedFolders() { try { localStorage.setItem('galleryExpanded', JSON.stringify(Array.from(expandedFolders))); } catch (e) {} }
 var lightboxIndex = 0;
 var currentPage = 1;
@@ -2065,6 +2109,36 @@ async function loadChildrenFor(wrapper, parentPath) {
 
 function getDepth(path) { return path ? path.split(/[\\/]/).length : 0; }
 
+function closeSiblingFolders(wrapper, folderPath) {
+    if (!accordionFolders || !wrapper || !wrapper.parentElement) return;
+    var siblings = wrapper.parentElement.children;
+    for (var i = 0; i < siblings.length; i++) {
+        var sib = siblings[i];
+        if (sib === wrapper || !sib.classList || !sib.classList.contains('folder-wrapper')) continue;
+        var sibItem = sib.querySelector(':scope > .folder-item');
+        var sibChildren = sib.querySelector(':scope > .folder-children');
+        var sibToggle = sibItem ? sibItem.querySelector('.folder-toggle') : null;
+        if (sibChildren) sibChildren.classList.remove('open');
+        if (sibToggle) sibToggle.classList.remove('open');
+        if (sibItem && sibItem.dataset && sibItem.dataset.path) {
+            expandedFolders.delete(sibItem.dataset.path);
+        }
+    }
+    if (folderPath) {
+        expandedFolders.forEach(function(p) {
+            if (p !== folderPath && folderPath.indexOf(p + '/') !== 0 && p.indexOf(folderPath + '/') !== 0) {
+                expandedFolders.delete(p);
+            }
+        });
+    }
+}
+
+function shouldRestoreFolderOpen(path) {
+    if (!path) return false;
+    if (!accordionFolders) return expandedFolders.has(path);
+    return !!currentFolder && (currentFolder === path || currentFolder.indexOf(path + '/') === 0);
+}
+
 function createFolderItem(folder, depth) {
     var wrapper = document.createElement('div');
     wrapper.className = 'folder-wrapper';
@@ -2103,6 +2177,7 @@ function createFolderItem(folder, depth) {
                     children.classList.remove('open'); toggle.classList.remove('open');
                     expandedFolders.delete(folder.path); saveExpandedFolders();
                 } else {
+                    closeSiblingFolders(wrapper, folder.path);
                     await loadChildrenFor(wrapper, folder.path);
                     children.classList.add('open'); toggle.classList.add('open');
                     expandedFolders.add(folder.path); saveExpandedFolders();
@@ -2114,7 +2189,7 @@ function createFolderItem(folder, depth) {
     if (folder.path === currentFolder) el.classList.add('active');
     // Restore saved expansion: open this folder and load its children (which will
     // themselves auto-expand if they were saved as open).
-    if (folder.has_children && expandedFolders.has(folder.path)) {
+    if (folder.has_children && shouldRestoreFolderOpen(folder.path)) {
         var savedToggle = el.querySelector('.folder-toggle');
         var savedChildren = wrapper.querySelector(':scope > .folder-children');
         loadChildrenFor(wrapper, folder.path).then(function() {
@@ -3506,6 +3581,10 @@ class GalleryModule(Module):
             "min": 0, "max": 32,
             "desc": "Threads used by 'Generate all thumbnails'. 0 = auto (min(8, CPU count)).",
         },
+        "accordion_folders": {
+            "type": "bool", "label": "Close other folders when opening one", "default": False,
+            "desc": "Keeps the folder tree compact by closing sibling branches when you open a folder. Off by default.",
+        },
         "index_workers": {
             "type": "number", "label": "Index workers", "default": 0,
             "min": 0, "max": 32,
@@ -3674,6 +3753,7 @@ class GalleryModule(Module):
             .replace("{MODULE_NAV}", module_nav)
             .replace("{FONT_LINKS}", _font_links())
             .replace("{BODY_CLASS}", theme_body_class(self.hub.settings))
+            .replace("{ACCORDION_FOLDERS}", "true" if self.setting("accordion_folders", False) else "false")
             .replace("{HELP_OVERLAY}", HELP_OVERLAY_HTML)
         )
         handler.respond_html(page)
