@@ -27,7 +27,7 @@ import zipfile
 
 class SettingsModule(Module):
     name = "Settings"
-    version = "1.1"
+    version = "1.2"
     icon = "\u2699"   # ⚙
     description = "Configure the hub and individual modules."
     show_in_tabs = False     # gear icon in topbar handles navigation
@@ -979,8 +979,11 @@ SETTINGS_BODY = r"""
 .module-card { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); }
 .module-card:last-child { border-bottom:none; }
 .module-card .mc-head { display:flex; align-items:center; gap:12px; flex:1; min-width:0; cursor:pointer; }
-.module-card .chevron { font-size:10px; color:var(--text-dim); transition:transform .2s; }
-.module-card .chevron.open { transform:rotate(90deg); }
+.module-card .chevron { display:inline-flex; align-items:center; gap:5px; min-width:76px; height:28px; padding:0 8px; border:1px solid var(--border-light); border-radius:var(--radius); background:var(--bg-card); color:var(--text-dim); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.4px; transition:all .15s; flex-shrink:0; }
+.module-card .chevron .module-expand-icon { display:inline-block; font-size:10px; line-height:1; transition:transform .15s; }
+.module-card .chevron.open { color:var(--accent); border-color:var(--accent-dim); background:var(--accent-glow); }
+.module-card .chevron.open .module-expand-icon { transform:rotate(90deg); }
+.module-card .mc-head:hover .chevron { color:var(--accent); border-color:var(--accent-dim); background:var(--bg-hover); }
 .module-icon { width:32px; height:32px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); flex-shrink:0; }
 .module-icon svg { width:18px; height:18px; display:block; }
 .module-info { flex:1; min-width:0; }
@@ -1758,7 +1761,7 @@ function loadAll() {
             var hasSettings = m.enabled && Object.keys(schema).length > 0;
             card.innerHTML =
                 '<div class="mc-head" data-acc="' + m.key + '">' +
-                    (hasSettings ? '<span class="chevron" id="chev_' + m.key + '">&#x25B6;</span>' : '') +
+                    (hasSettings ? '<span class="chevron" id="chev_' + m.key + '" title="Show module settings"><span class="module-expand-icon">&#x25B6;</span><span class="module-expand-text">Settings</span></span>' : '') +
                     '<div class="module-icon">' + (m.icon_html || '') + '</div>' +
                     '<div class="module-info">' +
                         '<div class="name"><span class="name-text">' + escHtml(m.name) + '</span><span class="version-badge">v' + escHtml(m.version || '1.0') + '</span></div>' +
@@ -1809,7 +1812,13 @@ function loadAll() {
                 if (!box) return;
                 var isOpen = box.classList.contains('open');
                 box.classList.toggle('open');
-                if (chev) chev.classList.toggle('open');
+                if (chev) {
+                    var nowOpen = box.classList.contains('open');
+                    chev.classList.toggle('open', nowOpen);
+                    chev.title = nowOpen ? 'Hide module settings' : 'Show module settings';
+                    var label = chev.querySelector('.module-expand-text');
+                    if (label) label.textContent = nowOpen ? 'Hide' : 'Settings';
+                }
             });
         });
     });
