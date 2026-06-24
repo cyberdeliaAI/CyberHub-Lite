@@ -1447,7 +1447,7 @@ GALLERY_BODY = r'''<!DOCTYPE html>
     --border: #1e2433; --border-light: #2a3040;
     --text: #c8cdd8; --text-dim: #6b7280; --text-bright: #e8ecf4;
     --accent: #4a9eff; --accent-dim: #2d6ab3; --accent-glow: rgba(74,158,255,0.08);
-    --green: #3ddc84; --orange: #f59e0b;
+    --green: #3ddc84; --orange: #f59e0b; --red:#ef4444;
     --prompt-text: #a9b1d6; --neg-prompt: #f7768e;
     --setting-key: #9ece6a; --setting-val: #c0caf5;
     --radius: 6px;
@@ -1583,6 +1583,8 @@ body { background:var(--bg-darkest); color:var(--text); font-family:var(--font);
 /* Meta panel favorite */
 .meta-fav-btn { cursor:pointer; font-size:16px; margin:0 10px 0 8px; width:28px; display:flex; align-items:center; justify-content:center; transition:transform .15s, color .15s; flex-shrink:0; }
 .meta-fav-btn:hover { transform:scale(1.15); color:var(--orange); }
+.meta-delete-btn { color:var(--text-dim); border-color:var(--border); }
+.meta-delete-btn:hover { color:var(--red); border-color:var(--red); background:rgba(239,68,68,.10); }
 
 /* Civitai model info */
 .meta-civitai { background:var(--bg-card); border:1px solid var(--accent-dim); border-radius:var(--radius); padding:8px 10px; font-size:11px; }
@@ -1704,7 +1706,11 @@ body { background:var(--bg-darkest); color:var(--text); font-family:var(--font);
 .lightbox-nav:hover { background:rgba(255,255,255,.2); }
 .lightbox-nav.prev { left:16px; }
 .lightbox-nav.next { right:16px; }
-.lightbox-close { position:absolute; top:16px; right:16px; background:rgba(255,255,255,.1); border:none; color:white; font-size:20px; width:40px; height:40px; cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center; }
+.lightbox-close, .lightbox-delete { position:absolute; top:16px; background:rgba(255,255,255,.1); border:none; color:white; font-size:20px; width:40px; height:40px; cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center; transition:background .15s, color .15s; }
+.lightbox-close { right:16px; }
+.lightbox-delete { right:64px; font-size:18px; }
+.lightbox-close:hover { background:rgba(255,255,255,.2); }
+.lightbox-delete:hover { background:rgba(239,68,68,.25); color:#fff; }
 .lightbox-counter { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); color:rgba(255,255,255,.6); font-family:var(--mono); font-size:12px; }
 
 ::-webkit-scrollbar { width:6px; height:6px; }
@@ -1870,6 +1876,7 @@ body { background:var(--bg-darkest); color:var(--text); font-family:var(--font);
         <img id="lightboxImg" src="">
         <button class="lightbox-nav prev" id="lbPrev">&#x276E;</button>
         <button class="lightbox-nav next" id="lbNext">&#x276F;</button>
+        <button class="lightbox-delete" id="lbDelete" title="Move current image to trash">&#x1F5D1;</button>
         <button class="lightbox-close" id="lbClose">&#x2715;</button>
         <div class="lightbox-counter" id="lbCounter"></div>
     </div>
@@ -2650,6 +2657,7 @@ function renderMetaPanel(meta, path) {
         '<div class="meta-panel-head">' +
             '<div class="meta-panel-title" title="' + escAttr(fileName) + '">' + escHtml(fileName) + '</div>' +
             '<div class="meta-panel-controls">' +
+                '<button class="meta-mini-btn meta-delete-btn" id="metaDeleteBtn" title="Move this image to trash (Delete)">&#x1F5D1;</button>' +
                 '<button class="meta-mini-btn ' + (metaPanelPinned ? 'active' : '') + '" id="metaPinBtn" title="' + (metaPanelPinned ? 'Unpin panel' : 'Pin panel') + '">' + pinLabel + '</button>' +
                 '<button class="meta-mini-btn" id="metaCollapseBtn" title="Hide metadata panel">&#x203A;</button>' +
             '</div>' +
@@ -2667,6 +2675,10 @@ function renderMetaPanel(meta, path) {
     document.getElementById('metaPinBtn').addEventListener('click', function() {
         setMetaPanelPinned(!metaPanelPinned);
         renderMetaPanel(meta, path);
+    });
+    document.getElementById('metaDeleteBtn').addEventListener('click', function(e) {
+        e.stopPropagation();
+        confirmDelete([path]);
     });
     document.getElementById('metaCollapseBtn').addEventListener('click', function() {
         setMetaPanelCollapsed(true);
@@ -2870,6 +2882,12 @@ function updateLightboxCounter() { document.getElementById('lbCounter').textCont
 document.getElementById('lbClose').addEventListener('click', function(e){e.stopPropagation();closeLightbox()});
 document.getElementById('lbPrev').addEventListener('click', function(e){e.stopPropagation();lightboxNav(-1)});
 document.getElementById('lbNext').addEventListener('click', function(e){e.stopPropagation();lightboxNav(1)});
+document.getElementById('lbDelete').addEventListener('click', function(e){
+    e.stopPropagation();
+    if (!currentFiles.length) return;
+    var f = currentFiles[lightboxIndex];
+    if (f && f.path) confirmDelete([f.path]);
+});
 document.getElementById('lightbox').addEventListener('click', function(e){ if(e.target===e.currentTarget||e.target.id==='lightboxImg') closeLightbox(); });
 
 // ── Sort ──
@@ -2956,18 +2974,39 @@ document.addEventListener('keydown', function(e) {
     var cards = Array.from(document.querySelectorAll('.thumb-card'));
     if (!cards.length) return;
     var idx = cards.findIndex(function(c){return c.classList.contains('selected')});
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-        e.preventDefault(); idx = Math.min(idx+1, cards.length-1);
-        cards[idx].click(); cards[idx].scrollIntoView({block:'nearest'});
-    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-        e.preventDefault(); idx = Math.max(idx-1, 0);
-        cards[idx].click(); cards[idx].scrollIntoView({block:'nearest'});
+    if (idx < 0) idx = 0;
+    var cols = getGalleryColumnCount(cards);
+    var nextIdx = idx;
+    if (e.key === 'ArrowRight') {
+        nextIdx = Math.min(idx + 1, cards.length - 1);
+    } else if (e.key === 'ArrowLeft') {
+        nextIdx = Math.max(idx - 1, 0);
+    } else if (e.key === 'ArrowDown') {
+        nextIdx = Math.min(idx + cols, cards.length - 1);
+    } else if (e.key === 'ArrowUp') {
+        nextIdx = Math.max(idx - cols, 0);
+    }
+    if (nextIdx !== idx || ['ArrowRight','ArrowLeft','ArrowDown','ArrowUp'].indexOf(e.key) >= 0) {
+        e.preventDefault();
+        cards[nextIdx].click();
+        cards[nextIdx].scrollIntoView({block:'nearest'});
     } else if (e.key === 'Enter' && selectedFile) {
         var si = currentFiles.findIndex(function(f){return f.path===selectedFile});
         if (si >= 0) lightboxIndex = si;
         openLightbox('/image/' + encodeURIComponent(selectedFile));
     }
 });
+
+function getGalleryColumnCount(cards) {
+    if (!cards || cards.length < 2) return 1;
+    var firstTop = cards[0].offsetTop;
+    var cols = 1;
+    for (var i = 1; i < cards.length; i++) {
+        if (Math.abs(cards[i].offsetTop - firstTop) > 2) break;
+        cols++;
+    }
+    return Math.max(1, cols);
+}
 
 // ── Multi-select & Delete ──
 
@@ -3073,6 +3112,9 @@ async function executeDelete(paths) {
                   (result.failed > 0 ? ', ' + result.failed + ' failed' : ''));
         // Remove deleted cards from DOM
         var deleted = new Set(result.results.filter(function(r){return r.ok}).map(function(r){return r.path}));
+        var lbOpen = document.getElementById('lightbox').classList.contains('open');
+        var lbFile = lbOpen && currentFiles[lightboxIndex] ? currentFiles[lightboxIndex].path : null;
+        var lbDeleted = lbFile && deleted.has(lbFile);
         document.querySelectorAll('.thumb-card').forEach(function(card) {
             if (deleted.has(card.dataset.path)) {
                 card.style.transition = 'opacity .2s, transform .2s';
@@ -3084,6 +3126,15 @@ async function executeDelete(paths) {
         // Clear from state
         deleted.forEach(function(p) { multiSelected.delete(p); });
         currentFiles = currentFiles.filter(function(f) { return !deleted.has(f.path); });
+        if (lbDeleted) {
+            if (!currentFiles.length) {
+                closeLightbox();
+            } else {
+                lightboxIndex = Math.min(lightboxIndex, currentFiles.length - 1);
+                document.getElementById('lightboxImg').src = '/image/' + encodeURIComponent(currentFiles[lightboxIndex].path);
+                updateLightboxCounter();
+            }
+        }
         if (selectedFile && deleted.has(selectedFile)) {
             selectedFile = null;
             document.getElementById('metaPanel').innerHTML = '<div class="meta-empty">Click an image to view its generation metadata</div>';
@@ -3537,7 +3588,7 @@ class GalleryModule(Module):
     """Module wrapper around GalleryDB + the HTML gallery UI."""
 
     name = "Gallery"
-    version = "1.2"
+    version = "1.2.1"
     icon = "\U0001F5BC"   # 🖼
     description = "Browse and manage your AI-generated image collection."
     order = 10

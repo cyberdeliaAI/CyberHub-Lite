@@ -27,7 +27,7 @@ import zipfile
 
 class SettingsModule(Module):
     name = "Settings"
-    version = "1.2"
+    version = "1.2.1"
     icon = "\u2699"   # ⚙
     description = "Configure the hub and individual modules."
     show_in_tabs = False     # gear icon in topbar handles navigation
@@ -569,9 +569,16 @@ class SettingsModule(Module):
             handler.respond_json({"error": "Expected a ZIP file upload."}, status=400)
             return
         try:
-            files = handler.parse_multipart(
-                content_len, content_type, max_upload=self._IMPORT_MAX_UPLOAD
-            )
+            try:
+                files = handler.parse_multipart(
+                    content_len, content_type, max_upload=self._IMPORT_MAX_UPLOAD
+                )
+            except TypeError:
+                # Compatibility with CyberHub 1.2 builds whose core/server.py
+                # still has the older parse_multipart(content_len, content_type)
+                # signature. The old helper has a 100 MB upload cap, which is
+                # enough for normal module hotfix zips like this one.
+                files = handler.parse_multipart(content_len, content_type)
             upload = files.get("package") or files.get("file")
             if not upload or not upload.get("data"):
                 handler.respond_json({"error": "Missing ZIP file."}, status=400)
