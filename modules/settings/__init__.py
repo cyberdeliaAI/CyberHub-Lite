@@ -27,7 +27,7 @@ import zipfile
 
 class SettingsModule(Module):
     name = "Settings"
-    version = "1.2.1"
+    version = "1.2.2"
     icon = "\u2699"   # ⚙
     description = "Configure the hub and individual modules."
     show_in_tabs = False     # gear icon in topbar handles navigation
@@ -512,7 +512,11 @@ class SettingsModule(Module):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         backup_root = os.path.join(root, "updates", "backups", f"import-{stamp}")
-        tmp_root = tempfile.mkdtemp(prefix="cyberhub-import-", dir=tempfile.gettempdir())
+        # Stage inside the CyberHub install so Windows can atomically replace files
+        # when the system temp folder is on another drive (e.g. C: temp -> D: hub).
+        tmp_parent = os.path.join(root, "updates", "tmp")
+        os.makedirs(tmp_parent, exist_ok=True)
+        tmp_root = tempfile.mkdtemp(prefix="cyberhub-import-", dir=tmp_parent)
         installed = []
         updated = 0
         created = 0
