@@ -1775,6 +1775,7 @@ body { background:var(--bg-darkest); color:var(--text); font-family:var(--font);
 .confirm-dialog .btn-cancel:hover { background:var(--bg-hover); }
 .confirm-dialog .btn-delete { background:var(--red); color:#fff; border-color:var(--red); }
 .confirm-dialog .btn-delete:hover { background:#dc2626; }
+.confirm-dialog button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 </style>
 </head>
 <body class="{BODY_CLASS}">
@@ -1965,6 +1966,7 @@ var selectedFile = null;
 var currentFiles = [];
 var currentMetaTab = 'metadata';
 var accordionFolders = {ACCORDION_FOLDERS};
+var skipDeleteConfirmation = {SKIP_DELETE_CONFIRMATION};
 // Folder-tree expansion is remembered across navigation/sessions.
 var expandedFolders = new Set();
 try { expandedFolders = new Set(JSON.parse(localStorage.getItem('galleryExpanded') || '[]')); } catch (e) {}
@@ -2930,9 +2932,21 @@ document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') { document.getElementById('searchInput').blur(); }
         return;
     }
-    // Confirm dialog open? handle Escape/Enter
+    // Confirm dialog open? handle Escape/Enter and left/right button choice.
     if (document.getElementById('confirmOverlay').classList.contains('open')) {
-        if (e.key === 'Escape') { closeConfirm(); }
+        var cancelBtn = document.getElementById('confirmCancel');
+        var okBtn = document.getElementById('confirmOk');
+        if (e.key === 'Escape') { e.preventDefault(); closeConfirm(); }
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            if (okBtn.style.display === 'none') cancelBtn.focus();
+            else if (document.activeElement === okBtn) cancelBtn.focus();
+            else okBtn.focus();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (document.activeElement === okBtn && okBtn.style.display !== 'none') okBtn.click();
+            else cancelBtn.click();
+        }
         return;
     }
     var lbOpen = document.getElementById('lightbox').classList.contains('open');
@@ -2944,6 +2958,13 @@ document.addEventListener('keydown', function(e) {
     if (lbOpen) {
         if (e.key === 'ArrowLeft') { e.preventDefault(); lightboxNav(-1); }
         if (e.key === 'ArrowRight') { e.preventDefault(); lightboxNav(1); }
+        if (e.key === 'Delete') {
+            e.preventDefault();
+            if (currentFiles.length) {
+                var f = currentFiles[lightboxIndex];
+                if (f && f.path) confirmDelete([f.path]);
+            }
+        }
         return;
     }
     // Delete key
@@ -3078,6 +3099,11 @@ function confirmDelete(paths) {
         okBtn.style.display = 'none';
         overlay.classList.add('open');
         confirmCallback = null;
+        setTimeout(function(){ document.getElementById('confirmCancel').focus(); }, 0);
+        return;
+    }
+    if (skipDeleteConfirmation) {
+        executeDelete(paths);
         return;
     }
     document.getElementById('confirmOk').style.display = '';
@@ -3087,6 +3113,7 @@ function confirmDelete(paths) {
         : n + ' files will be moved to your system trash.';
     overlay.classList.add('open');
     confirmCallback = function() { executeDelete(paths); };
+    setTimeout(function(){ document.getElementById('confirmCancel').focus(); }, 0);
 }
 
 function closeConfirm() {
@@ -3588,7 +3615,7 @@ class GalleryModule(Module):
     """Module wrapper around GalleryDB + the HTML gallery UI."""
 
     name = "Gallery"
-    version = "1.2.1"
+    version = "1.2.2"
     icon = "\U0001F5BC"   # 🖼
     description = "Browse and manage your AI-generated image collection."
     order = 10
@@ -3625,6 +3652,10 @@ class GalleryModule(Module):
         "accordion_folders": {
             "type": "bool", "label": "Close other folders when opening one", "default": False,
             "desc": "Keeps the folder tree compact by closing sibling branches when you open a folder. Off by default.",
+        },
+        "skip_delete_confirmation": {
+            "type": "bool", "label": "Skip delete confirmation", "default": False,
+            "desc": "Delete immediately after pressing Delete or the trash button. Files still go to the system trash.",
         },
         "index_workers": {
             "type": "number", "label": "Index workers", "default": 0,
@@ -3795,6 +3826,7 @@ class GalleryModule(Module):
             .replace("{FONT_LINKS}", _font_links())
             .replace("{BODY_CLASS}", theme_body_class(self.hub.settings))
             .replace("{ACCORDION_FOLDERS}", "true" if self.setting("accordion_folders", False) else "false")
+            .replace("{SKIP_DELETE_CONFIRMATION}", "true" if self.setting("skip_delete_confirmation", False) else "false")
             .replace("{HELP_OVERLAY}", HELP_OVERLAY_HTML)
         )
         handler.respond_html(page)
