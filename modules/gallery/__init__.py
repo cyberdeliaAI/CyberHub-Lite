@@ -409,6 +409,9 @@ class GalleryDB:
         with self.lock:
             if batch_changes:
                 conn.commit()
+            stale_roots = self._prune_unconfigured_roots(conn)
+            pruned_files += stale_roots[0]
+            pruned_folders += stale_roots[1]
             if prune_deleted:
                 print("[INDEX] Checking for deleted files...")
                 # Only prune files/folders belonging to roots that were actually scanned
@@ -767,6 +770,69 @@ class GalleryDB:
         if pruned_files or pruned_folders:
             print(f"[INDEX] Pruned {pruned_folders} missing folders and {pruned_files} files")
         return pruned_files, pruned_folders
+
+    def _prune_unconfigured_roots(self, conn):
+        """Remove DB rows for gallery roots that are no longer configured.
+
+        Settings stores the selected root folders, while SQLite stores the indexed
+        tree. If a root is removed from Settings, scans no longer visit it, so its
+        old rows need an explicit cleanup pass.
+        """
+        configured = set(self.roots.keys())
+        if not configured:
+            return 0, 0
+        roots = {
+            (r[0] or "").split("/", 1)[0]
+            for r in conn.execute("SELECT path FROM folders UNION SELECT path FROM files").fetchall()
+            if r[0]
+        }
+        stale_roots = sorted(r for r in roots if r and r not in configured)
+        if not stale_roots:
+            return 0, 0
+        pruned_files = 0
+        pruned_folders = 0
+        for root in stale_roots:
+            paths = [
+                r[0] for r in conn.execute(
+                    "SELECT path FROM files WHERE path=? OR path LIKE ?",
+                    (root, root + "/%")
+                ).fetchall()
+            ]
+            if paths:
+                pruned_files += self._prune_file_records(conn, paths)
+            cur = conn.execute(
+                "DELETE FROM folders WHERE path=? OR path LIKE ?",
+                (root, root + "/%")
+            )
+            pruned_folders += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        if pruned_files or pruned_folders:
+            print(f"[INDEX] Pruned {pruned_folders} unconfigured-root folders and {pruned_files} files")
+        return pruned_files, pruned_folders
+
+    def _prune_empty_folder_records(self, conn, candidate_folders):
+        """Remove indexed folder branches that no longer contain indexed images."""
+        candidates = set()
+        for folder in candidate_folders or []:
+            folder = (folder or "").strip("/")
+            while folder:
+                candidates.add(folder)
+                if "/" not in folder:
+                    break
+                folder = folder.rsplit("/", 1)[0]
+        pruned = 0
+        for folder in sorted(candidates, key=len, reverse=True):
+            has_files = conn.execute(
+                "SELECT 1 FROM files WHERE folder=? OR folder LIKE ? LIMIT 1",
+                (folder, folder + "/%")
+            ).fetchone()
+            if has_files:
+                continue
+            cur = conn.execute(
+                "DELETE FROM folders WHERE path=? OR path LIKE ?",
+                (folder, folder + "/%")
+            )
+            pruned += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        return pruned
 
     def get_subfolders(self, parent=""):
         conn = self._get_conn()
@@ -1158,6 +1224,7 @@ class GalleryDB:
         """Delete files: send to OS trash, remove from DB + thumbnails. Returns results per file."""
         conn = self._get_conn()
         results = []
+        affected_folders = set()
         for rel_path in rel_paths:
             full_path = self.resolve_path(rel_path)
             if not full_path or not os.path.isfile(full_path):
@@ -1176,7 +1243,11 @@ class GalleryDB:
                     conn.execute("DELETE FROM files WHERE path=?", (rel_path,))
                     # Update folder file count
                     folder = os.path.dirname(rel_path)
-                    conn.execute("UPDATE folders SET file_count = file_count - 1 WHERE path=? AND file_count > 0", (folder,))
+                    affected_folders.add(folder)
+                    conn.execute(
+                        "UPDATE folders SET file_count = (SELECT COUNT(*) FROM files WHERE folder=?) WHERE path=?",
+                        (folder, folder)
+                    )
                     conn.commit()
                 # Remove thumbnail
                 thumb = get_thumb_path(self.thumb_dir, rel_path)
@@ -1190,6 +1261,9 @@ class GalleryDB:
                 log_debug(f"Delete failed for {rel_path}: {e}")
         # Update tag counts
         with self.lock:
+            pruned_folders = self._prune_empty_folder_records(conn, affected_folders)
+            if pruned_folders:
+                print(f"[DELETE] Pruned {pruned_folders} empty folder records")
             conn.execute("UPDATE tags SET count = (SELECT COUNT(*) FROM file_tags WHERE file_tags.tag_id = tags.id)")
             conn.execute("DELETE FROM tags WHERE count = 0")
             conn.commit()
@@ -3167,6 +3241,7 @@ async function executeDelete(paths) {
             document.getElementById('metaPanel').innerHTML = '<div class="meta-empty">Click an image to view its generation metadata</div>';
         }
         updateSelectionBar();
+        await loadFolderTree();
         updateStatus();
         // Update gallery count display
         var countEl = document.getElementById('galleryCount');
@@ -3615,7 +3690,7 @@ class GalleryModule(Module):
     """Module wrapper around GalleryDB + the HTML gallery UI."""
 
     name = "Gallery"
-    version = "1.2.2"
+    version = "1.2.3"
     icon = "\U0001F5BC"   # 🖼
     description = "Browse and manage your AI-generated image collection."
     order = 10
