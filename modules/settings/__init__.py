@@ -27,7 +27,7 @@ import zipfile
 
 class SettingsModule(Module):
     name = "Settings"
-    version = "1.2.2"
+    version = "1.2.3"
     icon = "\u2699"   # ⚙
     description = "Configure the hub and individual modules."
     show_in_tabs = False     # gear icon in topbar handles navigation
@@ -633,7 +633,7 @@ class SettingsModule(Module):
                     [sys.executable] + sys.argv,
                     creationflags=subprocess.CREATE_NEW_CONSOLE
                 )
-                os._exit(0)
+                os._exit(42)
             else:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
         threading.Thread(target=do_restart, daemon=True).start()

@@ -64,4 +64,5 @@ if not exist "resources\fonts\inter-400.woff2" (
 
 :: Run
 ".venv\Scripts\python.exe" hub.py %*
+if errorlevel 42 exit /b 0
 pause

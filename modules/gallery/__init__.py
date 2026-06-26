@@ -3071,19 +3071,11 @@ document.addEventListener('keydown', function(e) {
     var idx = cards.findIndex(function(c){return c.classList.contains('selected')});
     if (idx < 0) idx = 0;
     var cols = getGalleryColumnCount(cards);
-    var nextIdx = idx;
-    if (e.key === 'ArrowRight') {
-        nextIdx = Math.min(idx + 1, cards.length - 1);
-    } else if (e.key === 'ArrowLeft') {
-        nextIdx = Math.max(idx - 1, 0);
-    } else if (e.key === 'ArrowDown') {
-        nextIdx = Math.min(idx + cols, cards.length - 1);
-    } else if (e.key === 'ArrowUp') {
-        nextIdx = Math.max(idx - cols, 0);
-    }
+    var nextIdx = getArrowTargetIndex(cards, idx, cols, e.key);
     if (nextIdx !== idx || ['ArrowRight','ArrowLeft','ArrowDown','ArrowUp'].indexOf(e.key) >= 0) {
         e.preventDefault();
-        cards[nextIdx].click();
+        if (e.shiftKey) extendSelectionWithKeyboard(cards, idx, nextIdx);
+        else cards[nextIdx].click();
         cards[nextIdx].scrollIntoView({block:'nearest'});
     } else if (e.key === 'Enter' && selectedFile) {
         var si = currentFiles.findIndex(function(f){return f.path===selectedFile});
@@ -3101,6 +3093,33 @@ function getGalleryColumnCount(cards) {
         cols++;
     }
     return Math.max(1, cols);
+}
+
+function findThumbCard(path) {
+    var cards = Array.from(document.querySelectorAll('.thumb-card'));
+    return cards.find(function(c){ return c.dataset.path === path; }) || null;
+}
+
+function getArrowTargetIndex(cards, idx, cols, key) {
+    if (key === 'ArrowRight') return Math.min(idx + 1, cards.length - 1);
+    if (key === 'ArrowLeft') return Math.max(idx - 1, 0);
+    if (key === 'ArrowDown') return Math.min(idx + cols, cards.length - 1);
+    if (key === 'ArrowUp') return Math.max(idx - cols, 0);
+    return idx;
+}
+
+function extendSelectionWithKeyboard(cards, fromIdx, toIdx) {
+    if (!cards.length) return;
+    var from = Math.max(0, Math.min(fromIdx, cards.length - 1));
+    var to = Math.max(0, Math.min(toIdx, cards.length - 1));
+    var start = Math.min(from, to);
+    var end = Math.max(from, to);
+    for (var i = start; i <= end; i++) {
+        multiSelected.add(cards[i].dataset.path);
+        cards[i].classList.add('multi-selected');
+    }
+    selectImage(cards[to].dataset.path, cards[to]);
+    updateSelectionBar();
 }
 
 // ── Multi-select & Delete ──
@@ -3216,6 +3235,15 @@ async function executeDelete(paths) {
         var lbOpen = document.getElementById('lightbox').classList.contains('open');
         var lbFile = lbOpen && currentFiles[lightboxIndex] ? currentFiles[lightboxIndex].path : null;
         var lbDeleted = lbFile && deleted.has(lbFile);
+        var oldFiles = currentFiles.slice();
+        var deletedIndexes = [];
+        for (var di = 0; di < oldFiles.length; di++) {
+            if (deleted.has(oldFiles[di].path)) deletedIndexes.push(di);
+        }
+        var selectedDeleted = selectedFile && deleted.has(selectedFile);
+        var fallbackIndex = selectedDeleted
+            ? oldFiles.findIndex(function(f){ return f.path === selectedFile; })
+            : (deletedIndexes.length ? deletedIndexes[0] : -1);
         document.querySelectorAll('.thumb-card').forEach(function(card) {
             if (deleted.has(card.dataset.path)) {
                 card.style.transition = 'opacity .2s, transform .2s';
@@ -3236,7 +3264,17 @@ async function executeDelete(paths) {
                 updateLightboxCounter();
             }
         }
-        if (selectedFile && deleted.has(selectedFile)) {
+        if (selectedDeleted || (!selectedFile && fallbackIndex >= 0)) {
+            if (currentFiles.length) {
+                var nextFile = currentFiles[Math.min(Math.max(fallbackIndex, 0), currentFiles.length - 1)];
+                var nextCard = findThumbCard(nextFile.path);
+                selectImage(nextFile.path, nextCard);
+                if (nextCard) nextCard.scrollIntoView({block:'nearest'});
+            } else {
+                selectedFile = null;
+                document.getElementById('metaPanel').innerHTML = '<div class="meta-empty">Click an image to view its generation metadata</div>';
+            }
+        } else if (selectedFile && deleted.has(selectedFile)) {
             selectedFile = null;
             document.getElementById('metaPanel').innerHTML = '<div class="meta-empty">Click an image to view its generation metadata</div>';
         }
@@ -3690,7 +3728,7 @@ class GalleryModule(Module):
     """Module wrapper around GalleryDB + the HTML gallery UI."""
 
     name = "Gallery"
-    version = "1.2.3"
+    version = "1.2.4"
     icon = "\U0001F5BC"   # 🖼
     description = "Browse and manage your AI-generated image collection."
     order = 10
