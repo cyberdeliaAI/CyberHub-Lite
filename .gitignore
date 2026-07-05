@@ -7,7 +7,10 @@ venv/
 env/
 
 # ─── CyberHub runtime / local state (never commit) ────────
-# settings.json holds local config: ports, folders, API keys.
+# All runtime state lives under data/ (settings, database, thumbnails).
+# Mount data/ as a Docker volume to persist state across containers.
+data/
+# Root-level patterns kept for safety (old installs may have left files here).
 settings.json
 cyberdelia.db
 cyberdelia.db-shm

@@ -103,7 +103,9 @@ class SettingsModule(Module):
             or client_ip in self._local_interface_ips()
         )
         allow_remote = bool(self.hub.settings.get_path("network.allow_remote_browse", False))
-        if not is_local and not allow_remote:
+        # If auth is enabled and we reached this endpoint, the user already passed
+        # the auth gate in _check_auth — so they're allowed to browse.
+        if not is_local and not allow_remote and not handler.require_auth:
             handler.respond_json({
                 "error": "Folder browser is only available on the local machine. Enable Settings > Network > Allow remote folder browser to browse this Hub PC from another device."
             }, status=403)
@@ -899,7 +901,7 @@ class SettingsModule(Module):
                 info["favorites_count"] = stats.get("favorites", 0)
                 # DB file size
                 try:
-                    db_path = os.path.join(self.hub.resources_dir, "cyberdelia.db")
+                    db_path = os.path.join(self.hub.settings_dir, "cyberdelia.db")
                     if os.path.isfile(db_path):
                         info["db_size"] = f"{os.path.getsize(db_path) / (1024**2):.1f} MB"
                 except Exception: pass
