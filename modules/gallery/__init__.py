@@ -104,6 +104,26 @@ def _read_file_payload(item):
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 class GalleryDB:
+    MODEL_FAMILY_RULES = (
+        (("z-image", "zimage", "z_image"), "Z-Image", "#38bdf8"),
+        (("anima",), "Anima", "#a855f7"),
+        (("krea",), "Krea", "#22c55e"),
+        (("flux",), "Flux", "#f59e0b"),
+        (("pony",), "Pony", "#ec4899"),
+        (("illustrious",), "Illustrious", "#60a5fa"),
+        (("noobai", "noob ai"), "NoobAI", "#14b8a6"),
+        (("sdxl", "sd_xl", "stable diffusion xl"), "SDXL", "#94a3b8"),
+        (("sd15", "sd 1.5", "sd1.5", "stable diffusion 1.5"), "SD 1.5", "#64748b"),
+        (("qwen",), "Qwen", "#fb923c"),
+        (("wan",), "Wan Video", "#06b6d4"),
+        (("hunyuan",), "Hunyuan", "#8b5cf6"),
+        (("ltxv", "ltx video"), "LTXV", "#f472b6"),
+    )
+    MODEL_COLORS = (
+        "#38bdf8", "#22c55e", "#a855f7", "#f59e0b", "#ec4899", "#14b8a6",
+        "#fb923c", "#8b5cf6", "#06b6d4", "#84cc16", "#f43f5e", "#60a5fa",
+    )
+
     def __init__(self, db_path, thumb_dir, roots):
         """
         db_path:   absolute path to the SQLite database file
@@ -678,6 +698,120 @@ class GalleryDB:
             self.has_fts = False
             print(f"[SEARCH] FTS index disabled after error: {e}")
 
+    @staticmethod
+    def _safe_meta_load(metadata_json):
+        if not metadata_json:
+            return {}
+        try:
+            meta = json.loads(metadata_json)
+            return meta if isinstance(meta, dict) else {}
+        except (TypeError, json.JSONDecodeError):
+            return {}
+
+    @staticmethod
+    def _clean_model_name(value):
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple, dict)):
+            return ""
+        text = str(value).strip().strip('"').strip("'")
+        if not text:
+            return ""
+        text = os.path.basename(text.replace("\\", "/"))
+        text = re.sub(r"\.(safetensors|ckpt|pt|pth|bin|onnx)$", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"[_]+", " ", text).strip()
+        return text[:120]
+
+    @staticmethod
+    def _find_model_value(value, depth=0):
+        if depth > 6:
+            return ""
+        keys = {
+            "model", "model_name", "base_model", "basemodel", "base_model_name",
+            "checkpoint", "checkpoint_name", "ckpt_name", "unet_name",
+            "modelname", "modelnamefull",
+        }
+        if isinstance(value, dict):
+            for k, v in value.items():
+                key = str(k).replace(" ", "").replace("-", "_").lower()
+                if key in keys:
+                    cleaned = GalleryDB._clean_model_name(v)
+                    if cleaned and re.search(r"[A-Za-z]", cleaned):
+                        return cleaned
+            for v in value.values():
+                found = GalleryDB._find_model_value(v, depth + 1)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for item in value[:80]:
+                found = GalleryDB._find_model_value(item, depth + 1)
+                if found:
+                    return found
+        return ""
+
+    @staticmethod
+    def _model_from_meta(meta):
+        if not isinstance(meta, dict) or not meta:
+            return ""
+        raw = meta.get("parameters") or ""
+        if raw:
+            parsed = parse_sd_parameters(str(raw))
+            settings = parsed.get("settings") or {}
+            for key in ("Model", "baseModel", "Base model", "Checkpoint"):
+                model = GalleryDB._clean_model_name(settings.get(key))
+                if model:
+                    return model
+        if isinstance(meta.get("prompt"), str) and meta.get("prompt", "").lstrip().startswith("{"):
+            comfy_meta = dict(meta)
+            comfy_meta = _metadata_mod.extract_comfyui_prompt(comfy_meta)
+            raw = comfy_meta.get("parameters") or ""
+            if raw:
+                parsed = parse_sd_parameters(str(raw))
+                settings = parsed.get("settings") or {}
+                model = GalleryDB._clean_model_name(settings.get("Model"))
+                if model:
+                    return model
+        return GalleryDB._find_model_value(meta)
+
+    @classmethod
+    def _model_family(cls, model_name):
+        text = (model_name or "").lower()
+        for patterns, label, color in cls.MODEL_FAMILY_RULES:
+            if any(p in text for p in patterns):
+                key = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+                return key, label, color
+        if model_name:
+            idx = int(hashlib.md5(model_name.lower().encode("utf-8")).hexdigest()[:2], 16) % len(cls.MODEL_COLORS)
+            return "other", "Other models", cls.MODEL_COLORS[idx]
+        return "unknown", "Unknown model", "#64748b"
+
+    @classmethod
+    def _file_model_info(cls, metadata_json):
+        meta = cls._safe_meta_load(metadata_json)
+        model = cls._model_from_meta(meta)
+        family_key, family_label, family_color = cls._model_family(model)
+        model_label = model or family_label
+        exact_key = re.sub(r"[^a-z0-9]+", "-", (model_label or "unknown").lower()).strip("-") or "unknown"
+        return {
+            "model_name": model,
+            "model_family_key": family_key,
+            "model_family_label": family_label,
+            "model_group_color": family_color,
+            "model_exact_key": exact_key,
+            "model_exact_label": model_label,
+        }
+
+    @classmethod
+    def _file_dict(cls, r, include_model_info=False):
+        data = {
+            "path": r[0], "name": r[1], "folder": r[2], "ext": r[3], "size": r[4],
+            "mtime": r[5], "width": r[6], "height": r[7],
+            "has_metadata": bool(r[8]), "favorite": bool(r[9]),
+        }
+        if include_model_info:
+            data.update(cls._file_model_info(r[10] if len(r) > 10 else None))
+        return data
+
     def _delete_search(self, conn, file_path):
         if self.has_fts:
             try:
@@ -834,10 +968,18 @@ class GalleryDB:
             pruned += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         return pruned
 
-    def get_subfolders(self, parent=""):
+    def get_subfolders(self, parent="", sort="name", active_path=""):
         conn = self._get_conn()
+        sort = (sort or "name").lower()
+        latest_expr = """
+                    COALESCE((
+                        SELECT MAX(df.mtime)
+                        FROM files df
+                        WHERE df.folder = f.path OR df.folder LIKE f.path || '/%'
+                    ), 0) AS latest_mtime
+        """ if sort == "newest" else "0 AS latest_mtime"
         with self.lock:
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT
                     f.path,
                     f.name,
@@ -855,7 +997,8 @@ class GalleryDB:
                               LIMIT 1
                           )
                     ) AS has_visible_children,
-                    f.cover_image
+                    f.cover_image,
+                    {latest_expr}
                 FROM folders f
                 WHERE f.parent = ?
                   AND f.path != ?
@@ -866,11 +1009,22 @@ class GalleryDB:
                         AND d.file_count > 0
                       LIMIT 1
                   )
-                ORDER BY f.name COLLATE NOCASE
             """, (parent, parent)).fetchall()
-        return [{"path": r[0], "name": r[1], "count": r[2], "has_children": bool(r[3]), "cover": r[4]} for r in rows]
+        items = [{"path": r[0], "name": r[1], "count": r[2], "has_children": bool(r[3]), "cover": r[4], "latest": r[5] or 0} for r in rows]
+        active_path = (active_path or "").strip("/")
+        if sort == "newest":
+            items.sort(key=lambda item: (-(item.get("latest") or 0), item["name"].lower()))
+        elif sort == "active":
+            def active_rank(item):
+                path = item.get("path") or ""
+                active = bool(active_path and (active_path == path or active_path.startswith(path + "/") or path.startswith(active_path + "/")))
+                return (0 if active else 1, item["name"].lower())
+            items.sort(key=active_rank)
+        else:
+            items.sort(key=lambda item: item["name"].lower())
+        return items
 
-    def get_files(self, folder="", sort="name", order="asc", page=1, per_page=DEFAULT_PER_PAGE, favorite_only=False, time_filter=None):
+    def get_files(self, folder="", sort="name", order="asc", page=1, per_page=DEFAULT_PER_PAGE, favorite_only=False, time_filter=None, include_model_info=False):
         conn = self._get_conn()
         sort_col = {"name": "name", "date": "mtime", "size": "size", "favorite": "favorite"}.get(sort, "name")
         # Favorite sort: favorites first, then by date
@@ -898,19 +1052,19 @@ class GalleryDB:
                 where.append("mtime>=?")
                 params.append(cutoff)
         where_sql = " AND ".join(where)
+        metadata_col = ", metadata_json" if include_model_info else ""
         with self.lock:
             total = conn.execute(f"SELECT COUNT(*) FROM files WHERE {where_sql}", params).fetchone()[0]
             rows = conn.execute(
-                f"SELECT path, name, ext, size, mtime, width, height, has_metadata, favorite FROM files WHERE {where_sql} ORDER BY {order_clause} LIMIT ? OFFSET ?",
+                f"SELECT path, name, folder, ext, size, mtime, width, height, has_metadata, favorite{metadata_col} FROM files WHERE {where_sql} ORDER BY {order_clause} LIMIT ? OFFSET ?",
                 params + [per_page, offset]).fetchall()
         pages = max(1, (total + per_page - 1) // per_page)
         return {
-            "files": [{"path": r[0], "name": r[1], "ext": r[2], "size": r[3], "mtime": r[4],
-                        "width": r[5], "height": r[6], "has_metadata": bool(r[7]), "favorite": bool(r[8])} for r in rows],
+            "files": [self._file_dict(r, include_model_info) for r in rows],
             "total": total, "page": page, "pages": pages, "per_page": per_page
         }
 
-    def get_timeline_files(self, time_filter="today", sort="date", order="desc", page=1, per_page=DEFAULT_PER_PAGE):
+    def get_timeline_files(self, time_filter="today", sort="date", order="desc", page=1, per_page=DEFAULT_PER_PAGE, include_model_info=False):
         """Get files across all folders filtered by time."""
         conn = self._get_conn()
         now = time.time()
@@ -919,33 +1073,33 @@ class GalleryDB:
         sort_col = {"name": "name", "date": "mtime", "size": "size"}.get(sort, "mtime")
         order_dir = "DESC" if order == "desc" else "ASC"
         offset = (page - 1) * per_page
+        metadata_col = ", metadata_json" if include_model_info else ""
         with self.lock:
             total = conn.execute("SELECT COUNT(*) FROM files WHERE mtime>=?", (cutoff,)).fetchone()[0]
             rows = conn.execute(
-                f"SELECT path, name, ext, size, mtime, width, height, has_metadata, favorite FROM files WHERE mtime>=? ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
+                f"SELECT path, name, folder, ext, size, mtime, width, height, has_metadata, favorite{metadata_col} FROM files WHERE mtime>=? ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
                 (cutoff, per_page, offset)).fetchall()
         pages = max(1, (total + per_page - 1) // per_page)
         return {
-            "files": [{"path": r[0], "name": r[1], "ext": r[2], "size": r[3], "mtime": r[4],
-                        "width": r[5], "height": r[6], "has_metadata": bool(r[7]), "favorite": bool(r[8])} for r in rows],
+            "files": [self._file_dict(r, include_model_info) for r in rows],
             "total": total, "page": page, "pages": pages, "per_page": per_page
         }
 
-    def get_all_favorites(self, sort="date", order="desc", page=1, per_page=DEFAULT_PER_PAGE):
+    def get_all_favorites(self, sort="date", order="desc", page=1, per_page=DEFAULT_PER_PAGE, include_model_info=False):
         """Get all favorites across all folders."""
         conn = self._get_conn()
         sort_col = {"name": "name", "date": "mtime", "size": "size"}.get(sort, "mtime")
         order_dir = "DESC" if order == "desc" else "ASC"
         offset = (page - 1) * per_page
+        metadata_col = ", metadata_json" if include_model_info else ""
         with self.lock:
             total = conn.execute("SELECT COUNT(*) FROM files WHERE favorite=1").fetchone()[0]
             rows = conn.execute(
-                f"SELECT path, name, ext, size, mtime, width, height, has_metadata, favorite FROM files WHERE favorite=1 ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
+                f"SELECT path, name, folder, ext, size, mtime, width, height, has_metadata, favorite{metadata_col} FROM files WHERE favorite=1 ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
                 (per_page, offset)).fetchall()
         pages = max(1, (total + per_page - 1) // per_page)
         return {
-            "files": [{"path": r[0], "name": r[1], "ext": r[2], "size": r[3], "mtime": r[4],
-                        "width": r[5], "height": r[6], "has_metadata": bool(r[7]), "favorite": bool(r[8])} for r in rows],
+            "files": [self._file_dict(r, include_model_info) for r in rows],
             "total": total, "page": page, "pages": pages, "per_page": per_page
         }
 
@@ -968,6 +1122,12 @@ class GalleryDB:
         meta_raw = json.loads(row[0]) if row[0] else {}
         info = {"width": row[1], "height": row[2], "size": row[3], "name": row[4], "ext": row[5]}
         parsed = {}
+        if "parameters" in meta_raw and "prompt" in meta_raw:
+            current = parse_sd_parameters(meta_raw.get("parameters") or "")
+            if not _metadata_mod._looks_like_prompt_text(current.get("prompt", "")):
+                refreshed = _metadata_mod.extract_comfyui_prompt(dict(meta_raw))
+                if refreshed.get("parameters"):
+                    meta_raw = refreshed
         if "parameters" in meta_raw:
             parsed = parse_sd_parameters(meta_raw["parameters"])
         elif "prompt" in meta_raw:
@@ -996,14 +1156,15 @@ class GalleryDB:
     _search_cache = {}
     _search_cache_key = None
 
-    def search(self, query, page=1, per_page=DEFAULT_PER_PAGE, sort="date", order="desc"):
+    def search(self, query, page=1, per_page=DEFAULT_PER_PAGE, sort="date", order="desc", include_model_info=False):
         """Global search using the full-text index, with legacy LIKE fallback."""
         conn = self._get_conn()
         sort_col = {"name": "name", "date": "mtime", "size": "size"}.get(sort, "mtime")
         order_dir = "DESC" if order == "desc" else "ASC"
         fts_query = self._fts_query(query)
         if not self.has_fts or not self.search_index_ready or not fts_query:
-            return self._search_like(query, page, per_page, sort, order)
+            return self._search_like(query, page, per_page, sort, order, include_model_info)
+        metadata_col = ", f.metadata_json" if include_model_info else ""
 
         with self.lock:
             fts_error = None
@@ -1015,7 +1176,7 @@ class GalleryDB:
                 offset = (page - 1) * per_page
                 rows = conn.execute(f"""
                     SELECT f.path, f.name, f.folder, f.ext, f.size, f.mtime,
-                           f.width, f.height, f.has_metadata, f.favorite
+                           f.width, f.height, f.has_metadata, f.favorite{metadata_col}
                     FROM gallery_search s
                     JOIN files f ON f.path = s.path
                     WHERE gallery_search MATCH ?
@@ -1041,22 +1202,22 @@ class GalleryDB:
 
         if fts_error:
             print(f"[SEARCH] FTS query failed; using legacy search ({fts_error})")
-            return self._search_like(query, page, per_page, sort, order)
+            return self._search_like(query, page, per_page, sort, order, include_model_info)
 
         pages = max(1, (total + per_page - 1) // per_page)
-        files = [{"path": r[0], "name": r[1], "folder": r[2], "ext": r[3], "size": r[4],
-                  "mtime": r[5], "width": r[6], "height": r[7], "has_metadata": bool(r[8]), "favorite": bool(r[9])} for r in rows]
+        files = [self._file_dict(r, include_model_info) for r in rows]
         folders = [{"path": r[0], "name": folder_info.get(r[0], r[0] or "Root"), "count": r[1]} for r in folder_rows]
         return {"files": files, "total": total, "page": page, "pages": pages,
                 "per_page": per_page, "folders": folders, "query": query}
 
-    def _search_like(self, query, page=1, per_page=DEFAULT_PER_PAGE, sort="date", order="desc"):
+    def _search_like(self, query, page=1, per_page=DEFAULT_PER_PAGE, sort="date", order="desc", include_model_info=False):
         """Legacy global search: tags + filename first, metadata_json LIKE only if needed."""
         conn = self._get_conn()
         sort_col = {"name": "name", "date": "mtime", "size": "size"}.get(sort, "mtime")
         order_dir = "DESC" if order == "desc" else "ASC"
         like = f"%{query.lower()}%"
         cache_key = f"legacy|{query}|{sort}|{order}"
+        metadata_col = ", metadata_json" if include_model_info else ""
 
         with self.lock:
             # Check if we have cached results for this exact query+sort
@@ -1102,7 +1263,7 @@ class GalleryDB:
             if page_paths:
                 ph = ",".join(["?"] * len(page_paths))
                 rows = conn.execute(
-                    f"SELECT path, name, folder, ext, size, mtime, width, height, has_metadata, favorite FROM files WHERE path IN ({ph}) ORDER BY {sort_col} {order_dir}",
+                    f"SELECT path, name, folder, ext, size, mtime, width, height, has_metadata, favorite{metadata_col} FROM files WHERE path IN ({ph}) ORDER BY {sort_col} {order_dir}",
                     page_paths).fetchall()
             else:
                 rows = []
@@ -1119,21 +1280,21 @@ class GalleryDB:
                 folder_info = {r[0]: r[1] for r in name_rows}
 
         pages = max(1, (total + per_page - 1) // per_page)
-        files = [{"path": r[0], "name": r[1], "folder": r[2], "ext": r[3], "size": r[4],
-                  "mtime": r[5], "width": r[6], "height": r[7], "has_metadata": bool(r[8]), "favorite": bool(r[9])} for r in rows]
+        files = [self._file_dict(r, include_model_info) for r in rows]
         folders = [{"path": r[0], "name": folder_info.get(r[0], r[0] or "Root"), "count": r[1]} for r in folder_rows]
         return {"files": files, "total": total, "page": page, "pages": pages,
                 "per_page": per_page, "folders": folders, "query": query}
 
-    def search_in_folder(self, query, folder, page=1, per_page=DEFAULT_PER_PAGE, sort="date", order="desc"):
+    def search_in_folder(self, query, folder, page=1, per_page=DEFAULT_PER_PAGE, sort="date", order="desc", include_model_info=False):
         """Search within a folder and its subfolders using FTS when available."""
         conn = self._get_conn()
         fts_query = self._fts_query(query)
         if not self.has_fts or not self.search_index_ready or not fts_query:
-            return self._search_in_folder_like(query, folder, page, per_page, sort, order)
+            return self._search_in_folder_like(query, folder, page, per_page, sort, order, include_model_info)
         folder_like = folder + "/%" if folder else "%"
         sort_col = {"name": "name", "date": "mtime", "size": "size"}.get(sort, "mtime")
         order_dir = "DESC" if order == "desc" else "ASC"
+        metadata_col = ", f.metadata_json" if include_model_info else ""
 
         with self.lock:
             fts_error = None
@@ -1147,7 +1308,7 @@ class GalleryDB:
                 offset = (page - 1) * per_page
                 rows = conn.execute(f"""
                     SELECT f.path, f.name, f.folder, f.ext, f.size, f.mtime,
-                           f.width, f.height, f.has_metadata, f.favorite
+                           f.width, f.height, f.has_metadata, f.favorite{metadata_col}
                     FROM gallery_search s
                     JOIN files f ON f.path = s.path
                     WHERE gallery_search MATCH ? AND {where_folder}
@@ -1159,20 +1320,20 @@ class GalleryDB:
 
         if fts_error:
             print(f"[SEARCH] Folder FTS query failed; using legacy search ({fts_error})")
-            return self._search_in_folder_like(query, folder, page, per_page, sort, order)
+            return self._search_in_folder_like(query, folder, page, per_page, sort, order, include_model_info)
 
         pages = max(1, (total + per_page - 1) // per_page)
-        files = [{"path": r[0], "name": r[1], "folder": r[2], "ext": r[3], "size": r[4],
-                  "mtime": r[5], "width": r[6], "height": r[7], "has_metadata": bool(r[8]), "favorite": bool(r[9])} for r in rows]
+        files = [self._file_dict(r, include_model_info) for r in rows]
         return {"files": files, "total": total, "page": page, "pages": pages, "per_page": per_page}
 
-    def _search_in_folder_like(self, query, folder, page=1, per_page=DEFAULT_PER_PAGE, sort="date", order="desc"):
+    def _search_in_folder_like(self, query, folder, page=1, per_page=DEFAULT_PER_PAGE, sort="date", order="desc", include_model_info=False):
         """Legacy folder search. Tags first, LIKE fallback."""
         conn = self._get_conn()
         like = f"%{query.lower()}%"
         folder_like = folder + "/%" if folder else "%"
         sort_col = {"name": "name", "date": "mtime", "size": "size"}.get(sort, "mtime")
         order_dir = "DESC" if order == "desc" else "ASC"
+        metadata_col = ", metadata_json" if include_model_info else ""
 
         with self.lock:
             # Tier 1: tags + filename
@@ -1201,12 +1362,11 @@ class GalleryDB:
             total = conn.execute(f"SELECT COUNT(*) FROM files WHERE {use_where}", use_params).fetchone()[0]
             offset = (page - 1) * per_page
             rows = conn.execute(
-                f"SELECT path, name, folder, ext, size, mtime, width, height, has_metadata, favorite FROM files WHERE {use_where} ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
+                f"SELECT path, name, folder, ext, size, mtime, width, height, has_metadata, favorite{metadata_col} FROM files WHERE {use_where} ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?",
                 use_params + (per_page, offset)).fetchall()
 
         pages = max(1, (total + per_page - 1) // per_page)
-        files = [{"path": r[0], "name": r[1], "folder": r[2], "ext": r[3], "size": r[4],
-                  "mtime": r[5], "width": r[6], "height": r[7], "has_metadata": bool(r[8]), "favorite": bool(r[9])} for r in rows]
+        files = [self._file_dict(r, include_model_info) for r in rows]
         return {"files": files, "total": total, "page": page, "pages": pages, "per_page": per_page}
 
     def get_tags(self, prefix="", limit=50):
@@ -1336,24 +1496,24 @@ class GalleryDB:
             conn.commit()
         return {"removed": len(paths)}
 
-    def get_collection_files(self, collection_id, sort="date", order="desc", page=1, per_page=DEFAULT_PER_PAGE):
+    def get_collection_files(self, collection_id, sort="date", order="desc", page=1, per_page=DEFAULT_PER_PAGE, include_model_info=False):
         conn = self._get_conn()
         sort_col = {"name": "f.name", "date": "fc.added", "size": "f.size"}.get(sort, "fc.added")
         order_dir = "DESC" if order == "desc" else "ASC"
         offset = (page - 1) * per_page
+        metadata_col = ", f.metadata_json" if include_model_info else ""
         with self.lock:
             total = conn.execute(
                 "SELECT COUNT(*) FROM file_collections fc JOIN files f ON fc.file_path = f.path WHERE fc.collection_id=?",
                 (collection_id,)).fetchone()[0]
             rows = conn.execute(
-                f"""SELECT f.path, f.name, f.ext, f.size, f.mtime, f.width, f.height, f.has_metadata, f.favorite
+                f"""SELECT f.path, f.name, f.folder, f.ext, f.size, f.mtime, f.width, f.height, f.has_metadata, f.favorite{metadata_col}
                     FROM file_collections fc JOIN files f ON fc.file_path = f.path
                     WHERE fc.collection_id=? ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?""",
                 (collection_id, per_page, offset)).fetchall()
         pages = max(1, (total + per_page - 1) // per_page)
         return {
-            "files": [{"path": r[0], "name": r[1], "ext": r[2], "size": r[3], "mtime": r[4],
-                        "width": r[5], "height": r[6], "has_metadata": bool(r[7]), "favorite": bool(r[8])} for r in rows],
+            "files": [self._file_dict(r, include_model_info) for r in rows],
             "total": total, "page": page, "pages": pages, "per_page": per_page
         }
 
@@ -1632,6 +1792,9 @@ body { background:var(--bg-darkest); color:var(--text); font-family:var(--font);
 
 /* Gallery Grid */
 .gallery-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--thumb-size),1fr)); gap:8px; flex:1; align-content:start; }
+.gallery-group-header { grid-column:1/-1; display:flex; align-items:center; gap:8px; min-height:28px; margin:8px 0 0; padding:4px 2px; color:var(--text-bright); font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; border-bottom:1px solid var(--border); }
+.gallery-group-dot { width:9px; height:9px; border-radius:50%; background:var(--model-color,#64748b); box-shadow:0 0 12px var(--model-color,#64748b); flex-shrink:0; }
+.gallery-group-count { color:var(--text-dim); font-family:var(--mono); font-size:10px; font-weight:500; margin-left:2px; }
 .thumb-card { position:relative; border-radius:var(--radius); overflow:hidden; background:var(--bg-card); cursor:pointer; border:2px solid transparent; transition:all .15s; aspect-ratio:1; }
 .thumb-card:hover { border-color:var(--border-light); transform:translateY(-1px); }
 .thumb-card.selected { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent-dim); }
@@ -1644,6 +1807,7 @@ body { background:var(--bg-darkest); color:var(--text); font-family:var(--font);
 .thumb-fav.active { opacity:1; }
 .thumb-dims { position:absolute; top:6px; left:6px; font-size:9px; font-family:var(--mono); color:rgba(255,255,255,.7); background:rgba(0,0,0,.5); padding:1px 4px; border-radius:3px; pointer-events:none; opacity:0; transition:opacity .15s; }
 .thumb-card:hover .thumb-dims { opacity:1; }
+.thumb-model-badge { position:absolute; left:6px; bottom:24px; max-width:calc(100% - 12px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9px; font-weight:700; color:#fff; background:rgba(0,0,0,.58); border:1px solid var(--model-color,#64748b); border-left:3px solid var(--model-color,#64748b); border-radius:999px; padding:2px 6px; pointer-events:none; opacity:.9; text-shadow:0 1px 2px rgba(0,0,0,.8); }
 
 /* Sidebar special items */
 .sidebar-divider { height:1px; background:var(--border); margin:8px 14px; }
@@ -1875,6 +2039,11 @@ body { background:var(--bg-darkest); color:var(--text); font-family:var(--font);
                 <option value="size-asc">Smallest</option>
                 <option value="favorite-desc">&#x2B50; Favorites first</option>
             </select>
+            <select class="sort-select" id="groupSelect" title="Group current page">
+                <option value="none">No grouping</option>
+                <option value="family">Group: model family</option>
+                <option value="model">Group: exact model</option>
+            </select>
             <input type="range" class="thumb-slider" id="thumbSlider" min="100" max="400" value="180" title="Thumbnail size">
             <button class="btn-icon" id="refreshBtn" title="Re-index">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
@@ -2037,10 +2206,13 @@ var API = {
 
 var currentFolder = '';
 var selectedFile = null;
+var selectionAnchorFile = null;
 var currentFiles = [];
 var currentMetaTab = 'metadata';
 var accordionFolders = {ACCORDION_FOLDERS};
 var skipDeleteConfirmation = {SKIP_DELETE_CONFIRMATION};
+var folderSortMode = '{FOLDER_SORT}';
+var galleryGroupMode = localStorage.getItem('galleryGroupMode') || 'none';
 // Folder-tree expansion is remembered across navigation/sessions.
 var expandedFolders = new Set();
 try { expandedFolders = new Set(JSON.parse(localStorage.getItem('galleryExpanded') || '[]')); } catch (e) {}
@@ -2078,6 +2250,7 @@ function saveGalleryStateNow() {
             folder: currentFolder || '',
             page: currentPage || 1,
             sort: document.getElementById('sortSelect') ? document.getElementById('sortSelect').value : 'date-desc',
+            group: document.getElementById('groupSelect') ? document.getElementById('groupSelect').value : galleryGroupMode,
             searchMode: !!searchMode,
             searchQuery: searchQuery || '',
             searchFolderFilter: searchFolderFilter,
@@ -2086,6 +2259,10 @@ function saveGalleryStateNow() {
             scrollTop: area ? area.scrollTop : 0
         }));
     } catch (e) {}
+}
+
+function modelInfoParam() {
+    return galleryGroupMode === 'none' ? '' : '&models=1';
 }
 
 function scheduleGalleryStateSave() {
@@ -2157,7 +2334,7 @@ async function loadFolderTree() {
     rootWrap.appendChild(rootChildren);
     tree.appendChild(rootWrap);
 
-    var data = await API.get('/api/folders?parent=');
+    var data = await API.get('/api/folders?parent=&active=' + encodeURIComponent(currentFolder || ''));
     if (!data) return;
     for (var i = 0; i < data.length; i++) {
         rootChildren.appendChild(createFolderItem(data[i], 1));
@@ -2169,7 +2346,7 @@ async function loadChildrenFor(wrapper, parentPath) {
     if (!childDiv) { childDiv = document.createElement('div'); childDiv.className = 'folder-children'; wrapper.appendChild(childDiv); }
     if (childDiv.dataset.loaded) return;
     childDiv.dataset.loaded = '1';
-    var data = await API.get('/api/folders?parent=' + encodeURIComponent(parentPath));
+    var data = await API.get('/api/folders?parent=' + encodeURIComponent(parentPath) + '&active=' + encodeURIComponent(currentFolder || ''));
     if (!data) return;
     for (var i = 0; i < data.length; i++) {
         childDiv.appendChild(createFolderItem(data[i], getDepth(data[i].path)));
@@ -2363,9 +2540,9 @@ async function doSearch() {
     if (searchFolderFilter !== null) {
         url = '/api/search_folder?q=' + encodeURIComponent(searchQuery) +
               '&folder=' + encodeURIComponent(searchFolderFilter) +
-              '&page=' + currentPage + sortParam;
+              '&page=' + currentPage + sortParam + modelInfoParam();
     } else {
-        url = '/api/search?q=' + encodeURIComponent(searchQuery) + '&page=' + currentPage + sortParam;
+        url = '/api/search?q=' + encodeURIComponent(searchQuery) + '&page=' + currentPage + sortParam + modelInfoParam();
     }
 
     var data = await API.get(url);
@@ -2433,7 +2610,7 @@ async function loadGallery(folder) {
     showGalleryPlaceholder('Loading gallery...', 'If the index is running, new images will appear here as they are processed.');
 
     var data = await API.get('/api/files?folder=' + encodeURIComponent(folder) +
-        '&sort=' + parts[0] + '&order=' + parts[1] + '&page=' + currentPage);
+        '&sort=' + parts[0] + '&order=' + parts[1] + '&page=' + currentPage + modelInfoParam());
     loading.classList.remove('active');
     if (!data) return;
 
@@ -2457,11 +2634,89 @@ function showGalleryPlaceholder(title, detail) {
     if (empty) empty.style.display = 'flex';
 }
 
+function safeModelColor(color) {
+    return /^#[0-9a-fA-F]{6}$/.test(color || '') ? color : '#64748b';
+}
+
+function getFileGroupInfo(file) {
+    if (galleryGroupMode === 'model') {
+        return {
+            key: file.model_exact_key || 'unknown',
+            label: file.model_exact_label || 'Unknown model',
+            color: safeModelColor(file.model_group_color)
+        };
+    }
+    return {
+        key: file.model_family_key || 'unknown',
+        label: file.model_family_label || 'Unknown model',
+        color: safeModelColor(file.model_group_color)
+    };
+}
+
+function createGalleryGroupHeader(info, count) {
+    var header = document.createElement('div');
+    header.className = 'gallery-group-header';
+    header.style.setProperty('--model-color', info.color);
+    header.innerHTML =
+        '<span class="gallery-group-dot"></span>' +
+        '<span>' + escHtml(info.label) + '</span>' +
+        '<span class="gallery-group-count">' + count + '</span>';
+    return header;
+}
+
+function createThumbCard(file, index) {
+    var card = document.createElement('div');
+    card.className = 'thumb-card';
+    card.dataset.path = file.path;
+    card.dataset.index = index;
+    var dimsText = (file.width && file.height) ? file.width + '\u00D7' + file.height : '';
+    var favClass = file.favorite ? 'thumb-fav active' : 'thumb-fav';
+    var favStar = file.favorite ? '\u2605' : '\u2606';
+    var groupInfo = getFileGroupInfo(file);
+    var showModelBadge = galleryGroupMode === 'none' && groupInfo.key !== 'unknown';
+    card.style.setProperty('--model-color', groupInfo.color);
+    card.innerHTML =
+        '<img data-src="/thumb/' + encodeURIComponent(file.path) + '" alt="' + escAttr(file.name) + '" loading="lazy">' +
+        '<span class="' + favClass + '" data-path="' + escAttr(file.path) + '">' + favStar + '</span>' +
+        (file.has_metadata ? '<div class="thumb-meta-badge" title="Metadata found"></div>' : '') +
+        (dimsText ? '<div class="thumb-dims">' + dimsText + '</div>' : '') +
+        (showModelBadge ? '<div class="thumb-model-badge">' + escHtml(groupInfo.label) + '</div>' : '') +
+        '<div class="thumb-overlay"><div class="thumb-name">' + escHtml(file.name) + '</div></div>';
+    // Star click handler (stop propagation so card click doesn't fire)
+    card.querySelector('.thumb-fav').addEventListener('click', (function(fp) {
+        return function(e) {
+            e.stopPropagation();
+            e.preventDefault();
+            toggleFavorite(fp);
+        };
+    })(file.path));
+    card.addEventListener('click', (function(fp,c,idx){return function(e){
+        if (e.ctrlKey || e.metaKey) {
+            // Toggle multi-select
+            e.preventDefault();
+            toggleMultiSelect(fp, c, true);
+        } else if (e.shiftKey && selectedFile) {
+            // Range select
+            e.preventDefault();
+            rangeSelect(idx);
+        } else {
+            // Normal click: clear multi-select if any, then select for metadata
+            if (multiSelected.size > 0) { clearMultiSelect(); }
+            selectImage(fp, c);
+        }
+    }})(file.path, card, index));
+    card.addEventListener('dblclick', (function(idx,fp){return function(){lightboxIndex=idx; openLightbox('/image/'+encodeURIComponent(fp))}})(index, file.path));
+    // Restore multi-select state if re-rendering same page
+    if (multiSelected.has(file.path)) { card.classList.add('multi-selected'); }
+    return card;
+}
+
 function renderGalleryFiles(files, total, isSearch) {
     var grid = document.getElementById('galleryGrid');
     var empty = document.getElementById('galleryEmpty');
     var toolbar = document.getElementById('galleryToolbar');
     var countEl = document.getElementById('galleryCount');
+    lastGalleryTotal = total || files.length || 0;
 
     if (files.length === 0) {
         showGalleryPlaceholder(
@@ -2496,49 +2751,31 @@ function renderGalleryFiles(files, total, isSearch) {
         });
     }, { rootMargin: '300px' });
 
-    for (var i = 0; i < files.length; i++) {
-        var file = files[i];
-        var card = document.createElement('div');
-        card.className = 'thumb-card';
-        card.dataset.path = file.path;
-        card.dataset.index = i;
-        var dimsText = (file.width && file.height) ? file.width + '\u00D7' + file.height : '';
-        var favClass = file.favorite ? 'thumb-fav active' : 'thumb-fav';
-        var favStar = file.favorite ? '\u2605' : '\u2606';
-        card.innerHTML =
-            '<img data-src="/thumb/' + encodeURIComponent(file.path) + '" alt="' + escAttr(file.name) + '" loading="lazy">' +
-            '<span class="' + favClass + '" data-path="' + escAttr(file.path) + '">' + favStar + '</span>' +
-            (file.has_metadata ? '<div class="thumb-meta-badge" title="Metadata found"></div>' : '') +
-            (dimsText ? '<div class="thumb-dims">' + dimsText + '</div>' : '') +
-            '<div class="thumb-overlay"><div class="thumb-name">' + escHtml(file.name) + '</div></div>';
-        // Star click handler (stop propagation so card click doesn't fire)
-        card.querySelector('.thumb-fav').addEventListener('click', (function(fp) {
-            return function(e) {
-                e.stopPropagation();
-                e.preventDefault();
-                toggleFavorite(fp);
-            };
-        })(file.path));
-        card.addEventListener('click', (function(fp,c,idx){return function(e){
-            if (e.ctrlKey || e.metaKey) {
-                // Toggle multi-select
-                e.preventDefault();
-                toggleMultiSelect(fp, c);
-            } else if (e.shiftKey && selectedFile) {
-                // Range select
-                e.preventDefault();
-                rangeSelect(idx);
-            } else {
-                // Normal click: clear multi-select if any, then select for metadata
-                if (multiSelected.size > 0) { clearMultiSelect(); }
-                selectImage(fp, c);
+    if (galleryGroupMode === 'none') {
+        for (var i = 0; i < files.length; i++) {
+            var card = createThumbCard(files[i], i);
+            grid.appendChild(card);
+            observer.observe(card);
+        }
+    } else {
+        var groups = [];
+        var groupMap = {};
+        for (var gi = 0; gi < files.length; gi++) {
+            var info = getFileGroupInfo(files[gi]);
+            if (!groupMap[info.key]) {
+                groupMap[info.key] = { info: info, items: [] };
+                groups.push(groupMap[info.key]);
             }
-        }})(file.path, card, i));
-        card.addEventListener('dblclick', (function(idx,fp){return function(){lightboxIndex=idx; openLightbox('/image/'+encodeURIComponent(fp))}})(i, file.path));
-        // Restore multi-select state if re-rendering same page
-        if (multiSelected.has(file.path)) { card.classList.add('multi-selected'); }
-        grid.appendChild(card);
-        observer.observe(card);
+            groupMap[info.key].items.push({ file: files[gi], index: gi });
+        }
+        groups.forEach(function(group) {
+            grid.appendChild(createGalleryGroupHeader(group.info, group.items.length));
+            group.items.forEach(function(item) {
+                var card = createThumbCard(item.file, item.index);
+                grid.appendChild(card);
+                observer.observe(card);
+            });
+        });
     }
     // Prefetch next page thumbnails
     restoreGalleryScrollIfNeeded();
@@ -2559,15 +2796,15 @@ function prefetchNextPage() {
         if (searchFolderFilter !== null) {
             url = '/api/search_folder?q=' + encodeURIComponent(searchQuery) +
                   '&folder=' + encodeURIComponent(searchFolderFilter) +
-                  '&page=' + nextPage + sortParam;
+                  '&page=' + nextPage + sortParam + modelInfoParam();
         } else {
-            url = '/api/search?q=' + encodeURIComponent(searchQuery) + '&page=' + nextPage + sortParam;
+            url = '/api/search?q=' + encodeURIComponent(searchQuery) + '&page=' + nextPage + sortParam + modelInfoParam();
         }
     } else {
         var sort = document.getElementById('sortSelect').value;
         var parts = sort.split('-');
         url = '/api/files?folder=' + encodeURIComponent(currentFolder) +
-              '&sort=' + parts[0] + '&order=' + parts[1] + '&page=' + nextPage;
+              '&sort=' + parts[0] + '&order=' + parts[1] + '&page=' + nextPage + modelInfoParam();
     }
     // Fire and forget — preload thumbnails into browser cache
     fetch(url).then(function(r) { return r.json(); }).then(function(data) {
@@ -2699,8 +2936,9 @@ function goToPage(page) {
 // ── Image Selection & Metadata
 // ═══════════════════════════════════════════════════════
 
-async function selectImage(path, cardEl) {
+async function selectImage(path, cardEl, keepSelectionAnchor) {
     selectedFile = path;
+    if (!keepSelectionAnchor) selectionAnchorFile = path || null;
     try { localStorage.setItem('gallerySelectedImage', path || ''); } catch (e) {}
     scheduleGalleryStateSave();
     setMetaPanelCollapsed(false);
@@ -2980,6 +3218,21 @@ document.getElementById('sortSelect').addEventListener('change', function() {
     else { loadGallery(currentFolder); }
     scheduleGalleryStateSave();
 });
+document.getElementById('groupSelect').addEventListener('change', function() {
+    galleryGroupMode = this.value || 'none';
+    try { localStorage.setItem('galleryGroupMode', galleryGroupMode); } catch (e) {}
+    currentPage = 1;
+    if (searchMode) { doSearch(); }
+    else if (specialView === 'favorites') { loadFavorites(document.querySelector('#navFavorites'), true); }
+    else if (specialView && specialView.startsWith('collection:')) {
+        var colId = parseInt(specialView.split(':')[1]);
+        var col = collectionsCache.find(function(c) { return c.id === colId; });
+        if (col) viewCollection(col, true);
+    }
+    else if (specialView) { loadTimeline(specialView, document.querySelector('.sidebar-special.active'), true); }
+    else { loadGallery(currentFolder); }
+    scheduleGalleryStateSave();
+});
 document.getElementById('thumbSlider').addEventListener('input', function(e) { document.documentElement.style.setProperty('--thumb-size', e.target.value+'px'); });
 document.getElementById('galleryArea').addEventListener('scroll', scheduleGalleryStateSave);
 document.getElementById('metaToggleBtn').addEventListener('click', function() {
@@ -3100,6 +3353,11 @@ function findThumbCard(path) {
     return cards.find(function(c){ return c.dataset.path === path; }) || null;
 }
 
+function getCardIndexByPath(cards, path) {
+    if (!path) return -1;
+    return cards.findIndex(function(c){ return c.dataset.path === path; });
+}
+
 function getArrowTargetIndex(cards, idx, cols, key) {
     if (key === 'ArrowRight') return Math.min(idx + 1, cards.length - 1);
     if (key === 'ArrowLeft') return Math.max(idx - 1, 0);
@@ -3110,21 +3368,31 @@ function getArrowTargetIndex(cards, idx, cols, key) {
 
 function extendSelectionWithKeyboard(cards, fromIdx, toIdx) {
     if (!cards.length) return;
-    var from = Math.max(0, Math.min(fromIdx, cards.length - 1));
-    var to = Math.max(0, Math.min(toIdx, cards.length - 1));
-    var start = Math.min(from, to);
-    var end = Math.max(from, to);
-    for (var i = start; i <= end; i++) {
-        multiSelected.add(cards[i].dataset.path);
-        cards[i].classList.add('multi-selected');
+    if (!selectionAnchorFile) {
+        selectionAnchorFile = selectedFile || (cards[fromIdx] ? cards[fromIdx].dataset.path : '');
     }
-    selectImage(cards[to].dataset.path, cards[to]);
-    updateSelectionBar();
+    var anchorIdx = getCardIndexByPath(cards, selectionAnchorFile);
+    var from = anchorIdx >= 0 ? anchorIdx : Math.max(0, Math.min(fromIdx, cards.length - 1));
+    var to = Math.max(0, Math.min(toIdx, cards.length - 1));
+    setRangeSelection(cards, from, to);
+    selectImage(cards[to].dataset.path, cards[to], true);
 }
 
 // ── Multi-select & Delete ──
 
-function toggleMultiSelect(path, card) {
+function ensureSelectedFileInMultiSelect(cards) {
+    if (multiSelected.size > 0 || !selectedFile) return;
+    var selectedCard = findThumbCard(selectedFile);
+    if (selectedCard) {
+        multiSelected.add(selectedFile);
+        selectedCard.classList.add('multi-selected');
+    }
+    selectionAnchorFile = selectedFile;
+}
+
+function toggleMultiSelect(path, card, keepFocus) {
+    var cards = Array.from(document.querySelectorAll('.thumb-card'));
+    ensureSelectedFileInMultiSelect(cards);
     if (multiSelected.has(path)) {
         multiSelected.delete(path);
         card.classList.remove('multi-selected');
@@ -3132,15 +3400,27 @@ function toggleMultiSelect(path, card) {
         multiSelected.add(path);
         card.classList.add('multi-selected');
     }
+    if (keepFocus) {
+        selectImage(path, card, true);
+        if (!selectionAnchorFile) selectionAnchorFile = path;
+    }
     updateSelectionBar();
 }
 
 function rangeSelect(toIdx) {
     var cards = Array.from(document.querySelectorAll('.thumb-card'));
-    var fromIdx = cards.findIndex(function(c){return c.dataset.path === selectedFile});
+    if (!selectionAnchorFile) selectionAnchorFile = selectedFile;
+    var fromIdx = getCardIndexByPath(cards, selectionAnchorFile);
     if (fromIdx < 0) fromIdx = 0;
+    setRangeSelection(cards, fromIdx, toIdx);
+    if (cards[toIdx]) selectImage(cards[toIdx].dataset.path, cards[toIdx], true);
+}
+
+function setRangeSelection(cards, fromIdx, toIdx) {
     var start = Math.min(fromIdx, toIdx);
     var end = Math.max(fromIdx, toIdx);
+    multiSelected.clear();
+    cards.forEach(function(c){ c.classList.remove('multi-selected'); });
     for (var i = start; i <= end; i++) {
         var p = cards[i].dataset.path;
         multiSelected.add(p);
@@ -3160,6 +3440,7 @@ function selectAllOnPage() {
 
 function clearMultiSelect() {
     multiSelected.clear();
+    selectionAnchorFile = selectedFile || null;
     document.querySelectorAll('.thumb-card.multi-selected').forEach(function(c){
         c.classList.remove('multi-selected');
     });
@@ -3391,7 +3672,7 @@ async function loadFavorites(el, resetPage) {
     var parts = sort.split('-');
     var sortField = parts[0] === 'favorite' ? 'date' : parts[0];
     var sortOrder = parts[0] === 'favorite' ? 'desc' : parts[1];
-    var data = await API.get('/api/favorites?sort=' + sortField + '&order=' + sortOrder + '&page=' + currentPage);
+    var data = await API.get('/api/favorites?sort=' + sortField + '&order=' + sortOrder + '&page=' + currentPage + modelInfoParam());
     if (!data) return;
     currentFiles = data.files || [];
     totalPages = data.pages || 1;
@@ -3410,7 +3691,7 @@ async function loadTimeline(period, el, resetPage) {
     updateBreadcrumb('');
     var sort = document.getElementById('sortSelect').value;
     var parts = sort.split('-');
-    var data = await API.get('/api/timeline?period=' + period + '&sort=' + parts[0] + '&order=' + parts[1] + '&page=' + currentPage);
+    var data = await API.get('/api/timeline?period=' + period + '&sort=' + parts[0] + '&order=' + parts[1] + '&page=' + currentPage + modelInfoParam());
     if (!data) return;
     currentFiles = data.files || [];
     totalPages = data.pages || 1;
@@ -3476,7 +3757,7 @@ async function viewCollection(col, resetPage) {
     if (el) el.classList.add('active');
     var sort = document.getElementById('sortSelect').value;
     var parts = sort.split('-');
-    var data = await API.get('/api/collection/files?id=' + col.id + '&sort=' + parts[0] + '&order=' + parts[1] + '&page=' + currentPage);
+    var data = await API.get('/api/collection/files?id=' + col.id + '&sort=' + parts[0] + '&order=' + parts[1] + '&page=' + currentPage + modelInfoParam());
     if (!data) return;
     currentFiles = data.files || [];
     totalPages = data.pages || 1;
@@ -3610,6 +3891,13 @@ function highlightFolderRetry(path) {
     if (savedState.sort && document.getElementById('sortSelect')) {
         document.getElementById('sortSelect').value = savedState.sort;
     }
+    if (savedState.group) {
+        galleryGroupMode = savedState.group;
+        try { localStorage.setItem('galleryGroupMode', galleryGroupMode); } catch (e) {}
+    }
+    if (document.getElementById('groupSelect')) {
+        document.getElementById('groupSelect').value = galleryGroupMode;
+    }
     currentPage = Math.max(1, parseInt(savedState.page || '1', 10) || 1);
     pendingRestoreScroll = savedState.scrollTop || 0;
     if (savedState.searchMode && savedState.searchQuery) {
@@ -3728,7 +4016,7 @@ class GalleryModule(Module):
     """Module wrapper around GalleryDB + the HTML gallery UI."""
 
     name = "Gallery"
-    version = "1.2.4"
+    version = "1.2.6"
     icon = "\U0001F5BC"   # 🖼
     description = "Browse and manage your AI-generated image collection."
     order = 10
@@ -3765,6 +4053,11 @@ class GalleryModule(Module):
         "accordion_folders": {
             "type": "bool", "label": "Close other folders when opening one", "default": False,
             "desc": "Keeps the folder tree compact by closing sibling branches when you open a folder. Off by default.",
+        },
+        "folder_sort": {
+            "type": "select", "label": "Folder sort", "default": "name",
+            "options": ["name", "newest", "active"],
+            "desc": "Sort folder siblings in the Gallery sidebar by name, newest image, or the currently active folder branch.",
         },
         "skip_delete_confirmation": {
             "type": "bool", "label": "Skip delete confirmation", "default": False,
@@ -3940,6 +4233,7 @@ class GalleryModule(Module):
             .replace("{BODY_CLASS}", theme_body_class(self.hub.settings))
             .replace("{ACCORDION_FOLDERS}", "true" if self.setting("accordion_folders", False) else "false")
             .replace("{SKIP_DELETE_CONFIRMATION}", "true" if self.setting("skip_delete_confirmation", False) else "false")
+            .replace("{FOLDER_SORT}", str(self.setting("folder_sort", "name") or "name"))
             .replace("{HELP_OVERLAY}", HELP_OVERLAY_HTML)
         )
         handler.respond_html(page)
@@ -3975,7 +4269,15 @@ class GalleryModule(Module):
     # ─── GET API ─────────────────────────────────────────────────────────────
     def _api_folders(self, handler, qs):
         if not self._require_db(handler): return
-        handler.respond_json(self.db.get_subfolders(qs.get("parent", [""])[0]))
+        handler.respond_json(self.db.get_subfolders(
+            qs.get("parent", [""])[0],
+            sort=str(self.setting("folder_sort", "name") or "name"),
+            active_path=qs.get("active", [""])[0],
+        ))
+
+    @staticmethod
+    def _api_wants_model_info(qs):
+        return qs.get("models", [""])[0] == "1"
 
     def _api_files(self, handler, qs):
         if not self._require_db(handler): return
@@ -3987,6 +4289,7 @@ class GalleryModule(Module):
             per_page=handler._int(qs, "per_page", DEFAULT_PER_PAGE),
             favorite_only=qs.get("favorites", [""])[0] == "1",
             time_filter=qs.get("time", [None])[0],
+            include_model_info=self._api_wants_model_info(qs),
         ))
 
     def _api_favorites(self, handler, qs):
@@ -3996,6 +4299,7 @@ class GalleryModule(Module):
             order=qs.get("order", ["desc"])[0],
             page=handler._int(qs, "page"),
             per_page=handler._int(qs, "per_page", DEFAULT_PER_PAGE),
+            include_model_info=self._api_wants_model_info(qs),
         ))
 
     def _api_timeline(self, handler, qs):
@@ -4006,6 +4310,7 @@ class GalleryModule(Module):
             order=qs.get("order", ["desc"])[0],
             page=handler._int(qs, "page"),
             per_page=handler._int(qs, "per_page", DEFAULT_PER_PAGE),
+            include_model_info=self._api_wants_model_info(qs),
         ))
 
     def _api_metadata(self, handler, qs):
@@ -4032,6 +4337,7 @@ class GalleryModule(Module):
             per_page=handler._int(qs, "per_page", DEFAULT_PER_PAGE),
             sort=qs.get("sort", ["date"])[0],
             order=qs.get("order", ["desc"])[0],
+            include_model_info=self._api_wants_model_info(qs),
         ))
 
     def _api_search_folder(self, handler, qs):
@@ -4043,6 +4349,7 @@ class GalleryModule(Module):
             per_page=handler._int(qs, "per_page", DEFAULT_PER_PAGE),
             sort=qs.get("sort", ["date"])[0],
             order=qs.get("order", ["desc"])[0],
+            include_model_info=self._api_wants_model_info(qs),
         ))
 
     def _api_reindex(self, handler, content_len, content_type):
@@ -4109,6 +4416,7 @@ class GalleryModule(Module):
             order=qs.get("order", ["desc"])[0],
             page=handler._int(qs, "page"),
             per_page=handler._int(qs, "per_page", DEFAULT_PER_PAGE),
+            include_model_info=self._api_wants_model_info(qs),
         ))
 
     def _api_file_collections(self, handler, qs):

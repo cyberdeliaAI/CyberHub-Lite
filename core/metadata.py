@@ -143,15 +143,27 @@ def _extract_comfy_generated_texts(workflow_json):
     generated = {}
     nodes = workflow.get("nodes", [])
     if not isinstance(nodes, list):
+        nodes = []
+    if not nodes and isinstance(workflow, dict):
+        nodes = [v for v in workflow.values() if isinstance(v, dict)]
+    if not isinstance(nodes, list):
         return generated
     for node in nodes:
         if not isinstance(node, dict):
             continue
         node_type = str(node.get("type") or node.get("class_type") or "")
-        if "Generated_Output" not in node_type and "Generated Output" not in node_type:
+        title = ""
+        if isinstance(node.get("_meta"), dict):
+            title = str(node["_meta"].get("title") or "")
+        title = " ".join([title, str(node.get("title") or "")])
+        node_match = " ".join([node_type, title]).lower()
+        if not any(part in node_match for part in (
+            "generated_output", "generated output", "showtext", "show text",
+            "previewtext", "preview text", "current positive text",
+        )):
             continue
         text = _first_text_widget(node.get("widgets_values"))
-        if not text:
+        if not text or not _looks_like_prompt_text(text):
             continue
         node_id = node.get("id")
         if node_id is not None:
@@ -296,6 +308,15 @@ def _looks_like_prompt_text(text):
         return False
     if lower.startswith(("create improved", "return only", "no explanations", "follow this internal order")):
         return False
+    if any(phrase in lower for phrase in (
+        "you are an expert prompt engineer",
+        "your task is to expand the user's prompt",
+        "think step by step before writing",
+        "then output a single expanded prompt",
+        "follow these rules strictly",
+        "user's input:",
+    )):
+        return False
     return True
 
 def _is_negative_comfy_node(node, key=""):
@@ -341,16 +362,21 @@ def _best_comfy_text_candidate(data, generated_texts=None):
         if not isinstance(node, dict):
             continue
         inputs = node.get("inputs", {})
-        if not isinstance(inputs, dict):
-            continue
-        for key in ("text", "prompt", "clip_text", "value", "input_prompt"):
-            candidate = inputs.get(key)
-            if not isinstance(candidate, str):
-                continue
-            score = _score_comfy_text_candidate(node, key, candidate)
+        if isinstance(inputs, dict):
+            for key in ("text", "prompt", "clip_text", "value", "input_prompt"):
+                candidate = inputs.get(key)
+                if not isinstance(candidate, str):
+                    continue
+                score = _score_comfy_text_candidate(node, key, candidate)
+                if score > best_score:
+                    best_score = score
+                    best_text = candidate.strip()
+        widget_text = _first_text_widget(node.get("widgets_values"))
+        if widget_text:
+            score = _score_comfy_text_candidate(node, "widgets_values", widget_text)
             if score > best_score:
                 best_score = score
-                best_text = candidate.strip()
+                best_text = widget_text.strip()
     return best_text
 
 def _is_comfy_sampler_node(class_type, inputs):
@@ -372,6 +398,7 @@ def extract_comfyui_prompt(meta):
         data = json.loads(prompt_json)
         if not isinstance(data, dict): return meta
         generated_texts = _extract_comfy_generated_texts(meta.get("workflow", ""))
+        generated_texts.update(_extract_comfy_generated_texts(prompt_json))
         prompt_text = neg_text = model_name = sampler = steps = cfg = ""
         for node_id, node in data.items():
             ct = node.get("class_type", "")
