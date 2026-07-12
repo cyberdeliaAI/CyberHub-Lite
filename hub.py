@@ -3,8 +3,7 @@
 CyberHub — Modular AI image toolkit.
 
 Modules live under modules/ and are auto-discovered at startup. Enable
-or disable them from the Settings page. All settings persist in
-settings.json next to this file.
+or disable them from the Settings page. All settings persist in data/settings.json.
 
 Usage:
     python hub.py                       # use settings.json
@@ -17,6 +16,7 @@ Usage:
 
 import argparse
 import os
+import signal
 import socket
 import sys
 import threading
@@ -30,7 +30,9 @@ from core import ModuleRegistry, available_module_classes, module_key_from_class
 from core.civitai import CivitaiLookup
 from core.server import Settings, HubHandler, ThreadedHTTPServer
 
-SETTINGS_PATH = os.path.join(HERE, "settings.json")
+SETTINGS_DIR = os.path.join(HERE, "data")
+os.makedirs(SETTINGS_DIR, exist_ok=True)
+SETTINGS_PATH = os.path.join(SETTINGS_DIR, "settings.json")
 RESOURCES_DIR = os.path.join(HERE, "resources")
 INSTANCE_LOCK_PATH = os.path.join(HERE, ".cyberhub.lock")
 _INSTANCE_LOCK_FILE = None
@@ -90,6 +92,7 @@ class Hub:
         self.registry = ModuleRegistry()
         self.civitai = CivitaiLookup()
         self.resources_dir = RESOURCES_DIR
+        self.settings_dir = SETTINGS_DIR
         # Filled in by run_server(); the diagnostic /api/system_info reads these so the
         # status panel can show "bound to 0.0.0.0:8899, up 2h 14m".
         self.bind = None
@@ -347,11 +350,21 @@ def main():
     print(f"[SERVE] Startup module: {startup}")
     print("[SERVE] Ctrl+C to stop")
 
+    def _sigterm_handler(sig, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[STOP] Shutting down…")
-        server.shutdown()
+        # Shutdown in a thread to avoid blocking if requests are still active
+        threading.Thread(target=server.shutdown, daemon=True).start()
+        # Give it a few seconds, then force exit
+        time.sleep(3)
+        print("[STOP] Exiting.")
+        os._exit(0)
 
 
 if __name__ == "__main__":

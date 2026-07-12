@@ -254,7 +254,9 @@ class PromptLibraryModule(Module):
 
     def on_startup(self):
         hub_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.db = PromptLibraryDB(os.path.join(hub_dir, "cyberdelia.db"))
+        data_dir = os.path.join(hub_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        self.db = PromptLibraryDB(os.path.join(data_dir, "cyberdelia.db"))
         self.attachments_dir = os.path.join(hub_dir, "resources", "library", "attachments")
         os.makedirs(self.attachments_dir, exist_ok=True)
         print(f"[LIBRARY] {self.db.get_stats()['total']} prompt cards")

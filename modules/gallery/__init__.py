@@ -4140,10 +4140,12 @@ class GalleryModule(Module):
             print("[GALLERY] No image folder configured. Open Settings to add one.")
             return
 
-        # Central DB and thumbs next to hub.py
+        # Central DB and thumbs in data/ next to hub.py
         hub_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        db_path = os.path.join(hub_dir, "cyberdelia.db")
-        self.thumb_dir = os.path.join(hub_dir, ".thumbs")
+        data_dir = os.path.join(hub_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        db_path = os.path.join(data_dir, "cyberdelia.db")
+        self.thumb_dir = os.path.join(data_dir, ".thumbs")
         os.makedirs(self.thumb_dir, exist_ok=True)
 
         for rn, rp in roots.items():
